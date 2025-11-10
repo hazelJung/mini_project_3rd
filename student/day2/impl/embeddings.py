@@ -8,8 +8,8 @@ import os, time
 from typing import List
 import numpy as np
 from openai import OpenAI
-# from httpx import ReadTimeout  # 선택: 재시도 구분용
-# from openai import OpenAI
+from httpx import ReadTimeout  # 선택: 재시도 구분용
+from openai import OpenAI
 
 
 class Embeddings:
