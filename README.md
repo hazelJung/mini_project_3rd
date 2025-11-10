@@ -54,11 +54,23 @@ git config --global user.email "깃허브 이메일"
 # 항상 작업 전 최신 코드 가져오기
 git pull origin main
 
-# 코드 수정 후
+# 코드 수정 후 첫 업로드 하시는 분
 git add .
 git commit -m "feat: 기능 추가"
 git push origin main
+
+# 이후 업로드 하시는 분
+git add .
+git commit -m "feat: 기능 추가"
+git fetch origin
+git rebase origin/main 
+git push origin main
+
+# 모두 본인 로컬에 병합된 스크립트 가져오기
+git pull origin main
 ```
+
+
 
 > 💡 push할 때 처음 한 번만 토큰 입력 → 자동 저장됨
 
