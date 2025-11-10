@@ -24,7 +24,15 @@ class Embeddings:
         #  - self.batch_size = batch_size; self.max_retries = max_retries
         #  - key = os.getenv("OPENAI_API_KEY"); self.client = OpenAI(api_key=key)
         # ----------------------------------------------------------------------------
-        raise NotImplementedError("TODO[DAY2-E-01]: Embeddings.__init__ 구성")
+        self.model = model or "text-embedding-3-small"
+        self.batch_size = batch_size
+        self.max_retries = max_retries
+
+        key = os.getenv("OPENAI_API_KEY")
+        if not key:
+            raise ValueError("환경 변수 'OPENAI_API_KEY'가 설정되어 있지 않습니다.")
+        
+        self.client = OpenAI(api_key=key)
 
     def _embed_once(self, text: str) -> np.ndarray:
         """
