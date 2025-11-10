@@ -7,9 +7,9 @@ Day2 인덱싱 엔트리포인트
 import os, argparse, numpy as np
 from typing import List
 
-from student.day2.impl.ingest import build_corpus, save_docs_jsonl
-from student.day2.impl.embeddings import Embeddings
-from student.day2.impl.store import FaissStore  # 제공됨
+from ..impl.ingest import build_corpus, save_docs_jsonl
+from ..impl.embeddings import Embeddings
+from ..impl.store import FaissStore  # 제공됨
 
 
 def build_index(paths: List[str], index_dir: str, model: str | None = None, batch_size: int = 128):
@@ -27,50 +27,61 @@ def build_index(paths: List[str], index_dir: str, model: str | None = None, batc
       6) save_docs_jsonl(corpus, docs_path)
     """
     # ----------------------------------------------------------------------------
-    # TODO[DAY2-I-01] 구현
+    # TODO[DAY2-I-01] 구현 지침
+    #  - corpus = build_corpus(paths)
+    #  - texts = [...]
+    #  - emb = Embeddings(model, batch_size)
+    #  - vecs = emb.encode(texts)
+    #  - os.makedirs(index_dir, exist_ok=True)
+    #  - store = FaissStore(...); store.add(...); store.save()
+    #  - save_docs_jsonl(corpus, docs_path)
     # ----------------------------------------------------------------------------
     # 1) 코퍼스 생성
     corpus = build_corpus(paths)
     if not corpus:
-        raise ValueError("build_index: 비어있는 코퍼스입니다. 경로/파일을 확인하세요.")
+        raise ValueError("build_index: 주어진 경로들에서 문서를 찾지 못했습니다.")
 
-    # 2) 텍스트 목록
-    texts = [item.get("text", "") for item in corpus]
-    if any(not isinstance(t, str) for t in texts):
-        raise TypeError("build_index: corpus 항목의 'text'는 문자열이어야 합니다.")
+    # 2) 텍스트 추출
+    texts = [item["text"] for item in corpus]
+    if not texts:
+        raise ValueError("build_index: 코퍼스에 text 필드가 비어있습니다.")
 
-    # 3) 임베딩
+    # 3) 임베딩 생성
     emb = Embeddings(model=model, batch_size=batch_size)
-    vecs = emb.encode(texts)  # (N, D)
-    if vecs is None or not isinstance(vecs, np.ndarray) or vecs.ndim != 2:
-        raise RuntimeError("build_index: 임베딩 결과가 유효한 2D ndarray가 아닙니다.")
-    if vecs.shape[0] != len(corpus):
-        raise RuntimeError(f"build_index: 임베딩 수({vecs.shape[0]})와 코퍼스 수({len(corpus)})가 다릅니다.")
+    vecs = emb.encode(texts)  # 예상 shape: (N, D)
 
-    # 4) 경로
-    # os.makedirs(index_dir, exist_ok=True)
+    if vecs is None or getattr(vecs, "shape", None) is None or vecs.shape[0] != len(texts):
+        raise RuntimeError("build_index: 임베딩 결과가 유효하지 않습니다.")
+
+    # 4) 경로 준비
+    os.makedirs(index_dir, exist_ok=True)
     index_path = os.path.join(index_dir, "faiss.index")
-    docs_path  = os.path.join(index_dir, "docs.jsonl")
+    docs_path = os.path.join(index_dir, "docs.jsonl")
 
-    # 5) FAISS 저장
+    # 5) FAISS 저장소 구성 및 저장
     store = FaissStore(dim=vecs.shape[1], index_path=index_path, docs_path=docs_path)
     store.add(vecs, corpus)
     store.save()
 
-    # 6) 문서 메타 JSONL 저장
+    # 6) 문서 메타 저장
     save_docs_jsonl(corpus, docs_path)
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--paths", nargs="+", required=True, help="인덱싱할 파일/디렉터리 경로(여러 개 가능)")
-    ap.add_argument("--index_dir", default="indices/day2", help="FAISS 인덱스 및 docs.jsonl 저장 경로")
-    ap.add_argument("--model", default=None, help="임베딩 모델 (기본값: Embeddings 내부 기본값)")
-    ap.add_argument("--batch_size", type=int, default=128, help="임베딩 배치 크기")
+    ap.add_argument("--paths", nargs="+", required=True)
+    ap.add_argument("--index_dir", default="indices/day2")
+    ap.add_argument("--model", default=None)
+    ap.add_argument("--batch_size", type=int, default=128)
     args = ap.parse_args()
 
     # ----------------------------------------------------------------------------
-    # TODO[DAY2-I-02] 구현
+    # TODO[DAY2-I-02] 구현 지침
+    #  - os.makedirs(args.index_dir, exist_ok=True)
+    #  - build_index(args.paths, args.index_dir, args.model, args.batch_size)
     # ----------------------------------------------------------------------------
     os.makedirs(args.index_dir, exist_ok=True)
     build_index(args.paths, args.index_dir, args.model, args.batch_size)
+    
+    print(f"[DAY2] Index built at: {args.index_dir}")
+

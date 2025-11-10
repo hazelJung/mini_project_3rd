@@ -7,6 +7,7 @@ import re, json
 from typing import List, Dict, Any
 from pathlib import Path
 
+
 def read_text_file(path: str) -> str:
     """
     안전한 텍스트 로드(utf-8, errors='ignore')
@@ -15,9 +16,11 @@ def read_text_file(path: str) -> str:
     # TODO[DAY2-G-01] 구현 지침
     #  - with open(path, "r", encoding="utf-8", errors="ignore") as f: return f.read()
     # ----------------------------------------------------------------------------
-    # 정답 구현:
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
         return f.read()
+
+
+
 
 
 def read_pdf_file(path: str) -> str:
@@ -31,15 +34,12 @@ def read_pdf_file(path: str) -> str:
     #  - for page in reader.pages: texts.append(page.extract_text() or "")
     #  - return "\n".join(texts)
     # ----------------------------------------------------------------------------
-    # 정답 구현:
-    from pypdf import PdfReader  # type: ignore
+    from pypdf import PdfReader
+
     reader = PdfReader(path)
-    texts: List[str] = []
+    texts = []
     for page in reader.pages:
-        try:
-            texts.append(page.extract_text() or "")
-        except Exception:
-            texts.append("")
+        texts.append(page.extract_text() or "")
     return "\n".join(texts)
 
 
@@ -55,7 +55,6 @@ def clean_text(s: str) -> str:
     #  - s = re.sub(r"\n{3,}", "\n\n", s)
     #  - return s.strip()
     # ----------------------------------------------------------------------------
-    # 정답 구현:
     s = s or ""
     s = re.sub(r"\r", "\n", s)
     s = re.sub(r"[ \t]+", " ", s)
@@ -79,16 +78,24 @@ def chunk_text(text: str, chunk_size: int = 1200, chunk_overlap: int = 200) -> L
     #       start += (chunk_size - chunk_overlap)
     #  - return chunks
     # ----------------------------------------------------------------------------
-    # 정답 구현:
-    text = clean_text(text)
     if len(text) <= chunk_size:
         return [text]
+
     chunks: List[str] = []
     start = 0
+
+    # 무한루프 방지: overlap이 chunk_size 이상일 때는 겹침 없이 분할
+    step = chunk_size - chunk_overlap
+    if step <= 0:
+        step = chunk_size
+
     while start < len(text):
         end = min(len(text), start + chunk_size)
         chunks.append(text[start:end])
-        start += (chunk_size - chunk_overlap)
+        if end == len(text):
+            break
+        start += step
+
     return chunks
 
 
@@ -113,8 +120,8 @@ def load_documents(paths_or_dir: List[str]) -> List[Dict[str, Any]]:
     #       txt = clean_text(raw); docs.append({"path":fp,"text":txt})
     #  - return docs
     # ----------------------------------------------------------------------------
-    # 정답 구현:
     files: List[str] = []
+
     for p in paths_or_dir:
         pp = Path(p)
         if pp.is_dir():
@@ -132,8 +139,10 @@ def load_documents(paths_or_dir: List[str]) -> List[Dict[str, Any]]:
             raw = read_pdf_file(fp)
         else:
             continue
+
         txt = clean_text(raw)
         docs.append({"path": fp, "text": txt})
+
     return docs
 
 
@@ -153,14 +162,21 @@ def build_corpus(paths_or_dir: List[str]) -> List[Dict[str, Any]]:
     #           corpus.append({"id":cid,"text":ch,"meta":{"path":d["path"],"chunk":i}})
     #  - return corpus
     # ----------------------------------------------------------------------------
-    # 정답 구현:
     docs = load_documents(paths_or_dir)
     corpus: List[Dict[str, Any]] = []
+
     for d in docs:
         chunks = chunk_text(d["text"])
         for i, ch in enumerate(chunks):
             cid = f"{d['path']}::chunk_{i:04d}"
-            corpus.append({"id": cid, "text": ch, "meta": {"path": d["path"], "chunk": i}})
+            corpus.append(
+                {
+                    "id": cid,
+                    "text": ch,
+                    "meta": {"path": d["path"], "chunk": i},
+                }
+            )
+
     return corpus
 
 
@@ -173,7 +189,6 @@ def save_docs_jsonl(items: List[Dict[str, Any]], out_path: str):
     #  - with open(out_path,"w",encoding="utf-8") as f:
     #       for it in items: f.write(json.dumps(it, ensure_ascii=False) + "\n")
     # ----------------------------------------------------------------------------
-    # 정답 구현:
     with open(out_path, "w", encoding="utf-8") as f:
         for it in items:
             f.write(json.dumps(it, ensure_ascii=False) + "\n")

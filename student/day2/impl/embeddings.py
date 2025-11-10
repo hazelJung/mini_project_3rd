@@ -7,6 +7,7 @@ OpenAI 임베딩 래퍼
 import os, time
 from typing import List
 import numpy as np
+from openai import OpenAI
 # from httpx import ReadTimeout  # 선택: 재시도 구분용
 # from openai import OpenAI
 
@@ -25,13 +26,12 @@ class Embeddings:
         #  - key = os.getenv("OPENAI_API_KEY"); self.client = OpenAI(api_key=key)
         # ----------------------------------------------------------------------------
         self.model = model or "text-embedding-3-small"
-        self.batch_size = batch_size
-        self.max_retries = max_retries
+        self.batch_size = int(batch_size)
+        self.max_retries = int(max_retries)
 
         key = os.getenv("OPENAI_API_KEY")
         if not key:
-            raise ValueError("환경 변수 'OPENAI_API_KEY'가 설정되어 있지 않습니다.")
-        
+            raise RuntimeError("OPENAI_API_KEY 환경변수가 설정되어 있지 않습니다.")
         self.client = OpenAI(api_key=key)
 
     def _embed_once(self, text: str) -> np.ndarray:
@@ -46,17 +46,16 @@ class Embeddings:
         #  - norm = np.linalg.norm(vec) + 1e-12; vec = vec / norm
         #  - return vec
         # ----------------------------------------------------------------------------
-        # 1. OpenAI API 호출
-        # 여기서 예외가 발생하면 바로 상위의 encode 메서드로 전파됩니다.
+        # OpenAI API 호출
         resp = self.client.embeddings.create(model=self.model, input=text)
-        
-        # 2. 결과 추출 및 Numpy 배열 변환
+
+        # 벡터 변환
         vec = np.array(resp.data[0].embedding, dtype="float32")
-        
-        # 3. L2 정규화
-        norm = np.linalg.norm(vec)
-        vec = vec / (norm + 1e-12)
-        
+
+        # L2 정규화
+        norm = np.linalg.norm(vec) + 1e-12
+        vec = vec / norm
+
         return vec
 
     def encode(self, texts: List[str]) -> np.ndarray:
@@ -79,34 +78,22 @@ class Embeddings:
         #                if attempt == self.max_retries - 1: raise
         #  - return np.vstack(out)
         # ----------------------------------------------------------------------------
-        EMBEDDING_DIM = 1536
         if not texts:
-            return np.zeros((0, EMBEDDING_DIM), dtype="float32")
+            return np.zeros((0, 1536), dtype="float32")
 
-        out = []
-        # (지침에 따른 배치 처리 순회: start 인덱스를 배치 크기만큼 이동하며 순회)
+        out: list[np.ndarray] = []
+
         for start in range(0, len(texts), self.batch_size):
             batch = texts[start:start + self.batch_size]
-            
-            # 배치 내 각 텍스트 처리
             for each in batch:
                 for attempt in range(self.max_retries):
                     try:
-                        # 단일 텍스트 임베딩 호출
-                        vec = self._embed_once(each)
-                        out.append(vec)
-                        break  # 성공했으므로 다음 텍스트로 이동
-                    except Exception as e:
-                        # 예외 발생 시 재시도 (백오프)
-                        # 0.5초 * (2^attempt) 만큼 대기
-                        sleep_time = 0.5 * (2 ** attempt)
-                        print(f"임베딩 실패 (시도 {attempt + 1}/{self.max_retries}). {sleep_time:.1f}초 후 재시도... 에러: {e}")
-                        time.sleep(sleep_time)
-                        
-                        # 마지막 시도에서도 실패하면 예외 발생
+                        out.append(self._embed_once(each))
+                        break
+                    except Exception:
+                        # Exponential backoff: 0.5s, 1s, 2s, 4s, ...
+                        time.sleep(0.5 * (2 ** attempt))
                         if attempt == self.max_retries - 1:
-                            print(f"최대 재시도 횟수({self.max_retries}) 초과. 임베딩 실패.")
-                            raise # 원본 예외를 상위로 전파
-                            
-        # 결과를 하나의 numpy 배열로 합치기
-        return np.vstack(out)
+                            raise
+
+        return np.vstack(out) if out else np.zeros((0, 1536), dtype="float32")
