@@ -38,7 +38,18 @@ class Embeddings:
         #  - norm = np.linalg.norm(vec) + 1e-12; vec = vec / norm
         #  - return vec
         # ----------------------------------------------------------------------------
-        raise NotImplementedError("TODO[DAY2-E-02]: 단일 임베딩 호출")
+        # 1. OpenAI API 호출
+        # 여기서 예외가 발생하면 바로 상위의 encode 메서드로 전파됩니다.
+        resp = self.client.embeddings.create(model=self.model, input=text)
+        
+        # 2. 결과 추출 및 Numpy 배열 변환
+        vec = np.array(resp.data[0].embedding, dtype="float32")
+        
+        # 3. L2 정규화
+        norm = np.linalg.norm(vec)
+        vec = vec / (norm + 1e-12)
+        
+        return vec
 
     def encode(self, texts: List[str]) -> np.ndarray:
         """
@@ -60,4 +71,34 @@ class Embeddings:
         #                if attempt == self.max_retries - 1: raise
         #  - return np.vstack(out)
         # ----------------------------------------------------------------------------
-        raise NotImplementedError("TODO[DAY2-E-03]: 배치 임베딩 인코딩")
+        EMBEDDING_DIM = 1536
+        if not texts:
+            return np.zeros((0, EMBEDDING_DIM), dtype="float32")
+
+        out = []
+        # (지침에 따른 배치 처리 순회: start 인덱스를 배치 크기만큼 이동하며 순회)
+        for start in range(0, len(texts), self.batch_size):
+            batch = texts[start:start + self.batch_size]
+            
+            # 배치 내 각 텍스트 처리
+            for each in batch:
+                for attempt in range(self.max_retries):
+                    try:
+                        # 단일 텍스트 임베딩 호출
+                        vec = self._embed_once(each)
+                        out.append(vec)
+                        break  # 성공했으므로 다음 텍스트로 이동
+                    except Exception as e:
+                        # 예외 발생 시 재시도 (백오프)
+                        # 0.5초 * (2^attempt) 만큼 대기
+                        sleep_time = 0.5 * (2 ** attempt)
+                        print(f"임베딩 실패 (시도 {attempt + 1}/{self.max_retries}). {sleep_time:.1f}초 후 재시도... 에러: {e}")
+                        time.sleep(sleep_time)
+                        
+                        # 마지막 시도에서도 실패하면 예외 발생
+                        if attempt == self.max_retries - 1:
+                            print(f"최대 재시도 횟수({self.max_retries}) 초과. 임베딩 실패.")
+                            raise # 원본 예외를 상위로 전파
+                            
+        # 결과를 하나의 numpy 배열로 합치기
+        return np.vstack(out)
