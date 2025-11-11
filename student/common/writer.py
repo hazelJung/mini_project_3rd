@@ -8,6 +8,8 @@ def render_day1(query: str, payload: Dict[str, Any]) -> str:
     prices = payload.get("prices", []) or []
     profile = (payload.get("company_profile") or "").strip()
     profile_sources = payload.get("profile_sources") or []
+    risk = payload.get("risk_top", []) or []    # 리스크 기능 추가
+
 
     lines = [f"# 웹 리서치 리포트", f"- 질의: {query}", ""]
 
@@ -37,6 +39,34 @@ def render_day1(query: str, payload: Dict[str, Any]) -> str:
             for u in profile_sources[:3]:
                 lines.append(f"- {u}")
         lines.append("")
+
+    # (2.5) 투자 리스크 모니터링
+    if risk:
+        lines.append("## 투자 리스크 모니터링")
+        for r in risk:
+            title = r.get("title") or r.get("url") or "link"
+            src = r.get("source") or ""
+            date = r.get("published_date") or r.get("date") or ""
+            url = r.get("url", "")
+            risk_score = r.get("risk_score")
+            tail = f" — {src}" + (f" ({date})" if date else "")
+            score_str = f" [risk_score: {risk_score}]" if risk_score is not None else ""
+            lines.append(f"- [{title}]({url}){tail}{score_str}")
+
+            # 매칭된 부정 키워드
+            matched = r.get("matched_keywords") or []
+            if matched:
+                lines.append(f"  - 부정 키워드 매칭: {', '.join(matched[:10])}")
+
+            # 두 줄 발췌
+            raw = (r.get("content") or r.get("snippet") or "").strip().replace("\n"," ")
+            if raw:
+                excerpt = raw[:280].rstrip()
+                if len(raw) > 280:
+                    excerpt += "…"
+                lines.append(f"  > {excerpt}")
+        lines.append("")
+
 
     # 3) 상위 웹 결과(타이틀 + 메타 + 2줄 발췌)
     if web:

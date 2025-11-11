@@ -15,6 +15,13 @@ class Day1Plan:
     tickers: List[str] = field(default_factory=list)
     output_style: str = "report"  # "report" | "summary"
 
+        # ▼▼ 신규: 투자 리스크 모니터링 옵션 ▼▼
+    do_risk: bool = False                         # 리스크 검색 수행 여부
+    risk_keywords: List[str] = field(default_factory=list)  # 사용자 추가 키워드
+    risk_trust_only: bool = True                  # 신뢰 도메인만 제한할지
+    risk_time_range: str = "y"                    # 'd'|'w'|'m'|'y'|'all' (Tavily)
+    risk_topk: int = 8                            # 상위 몇 개까지 노출
+
 # (선택) 웹 결과 아이템이 dataclass라면, "기본값 없는 필드 먼저" 규칙 엄수
 @dataclass
 class WebResultItem:
