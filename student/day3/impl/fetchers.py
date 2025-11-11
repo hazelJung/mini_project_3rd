@@ -30,20 +30,24 @@ WEB_TOPK = 2
 def fetch_nipa(query: str, topk: int = NIPA_TOPK) -> List[Dict[str, Any]]:
     """
     NIPA 도메인에 한정한 사업 공고 검색
+    - 영상/미디어 관련 기술에 특화
     - include_domains=["nipa.kr"] 힌트를 주고, 검색 쿼리에도 site:nipa.kr을 붙입니다.
     - '공고/모집/지원' 같은 키워드로 사업 공고 문서를 우선 노출시킵니다.
     반환: Day1 web 스키마 리스트 [{title, url, content/snippet, ...}, ...]
     """
-    # TODO[DAY3-F-01]:
-    # 1) os.getenv("TAVILY_API_KEY","")로 키를 읽습니다.
-    # 2) 질의 q를 만들 때: f"{query} 공고 모집 지원 site:nipa.kr"
-    # 3) search_tavily(q, key, top_k=topk, timeout=DEFAULT_TIMEOUT, include_domains=["nipa.kr"])
-    # 4) 그대로 반환
     # 1) API 키 로드
     key = os.getenv("TAVILY_API_KEY", "")
 
-    # 2) 질의어 구성
-    q = f"{query} 공고 모집 지원 site:nipa.kr"
+    # 2) 질의어 구성 (영상/미디어 기술 키워드 자동 추가)
+    # 영상/미디어 관련 키워드가 없으면 자동 추가
+    media_keywords = ["영상", "미디어", "콘텐츠", "스트리밍", "VR", "AR", "AI"]
+    has_media_keyword = any(kw in query for kw in media_keywords)
+    
+    if not has_media_keyword:
+        # 영상/미디어 키워드가 없으면 추가 (영화 투자사 관점)
+        q = f"{query} 영상 미디어 콘텐츠 공고 모집 지원 site:nipa.kr"
+    else:
+        q = f"{query} 공고 모집 지원 site:nipa.kr"
 
     # 3) Tavily 검색 (도메인 한정)
     results = search_tavily(
@@ -60,14 +64,20 @@ def fetch_nipa(query: str, topk: int = NIPA_TOPK) -> List[Dict[str, Any]]:
 def fetch_bizinfo(query: str, topk: int = BIZINFO_TOPK) -> List[Dict[str, Any]]:
     """
     Bizinfo(기업마당) 도메인에 한정한 사업 공고 검색
+    - 영상/미디어 관련 기술에 특화
     - include_domains=["bizinfo.go.kr"]
     - '공고/모집/지원' 키워드 보강
     """
-    # TODO[DAY3-F-02]:
-    # 위 NIPA와 동일한 패턴이며, site:bizinfo.go.kr / include_domains=["bizinfo.go.kr"] 를 사용
     key = os.getenv("TAVILY_API_KEY", "")
 
-    q = f"{query} 공고 모집 지원 site:bizinfo.go.kr"
+    # 영상/미디어 관련 키워드가 없으면 자동 추가
+    media_keywords = ["영상", "미디어", "콘텐츠", "스트리밍", "VR", "AR", "AI"]
+    has_media_keyword = any(kw in query for kw in media_keywords)
+    
+    if not has_media_keyword:
+        q = f"{query} 영상 미디어 콘텐츠 공고 모집 지원 site:bizinfo.go.kr"
+    else:
+        q = f"{query} 공고 모집 지원 site:bizinfo.go.kr"
 
     results = search_tavily(
         q,
@@ -78,18 +88,23 @@ def fetch_bizinfo(query: str, topk: int = BIZINFO_TOPK) -> List[Dict[str, Any]]:
     )
     return results or []
 
-def fetch_web(query: str, topk: int = WEB_TOPK) -> List[Dict[str, Any]]:
+def fetch_web(query: str, topk: int = WEB_TOPK, api_key: Optional[str] = None) -> List[Dict[str, Any]]:
     """
-    일반 웹 Fallback: 사업 공고와 관련된 키워드를 넣어 Recall 확보
+    일반 웹 Fallback: 영상/미디어 관련 기술 사업 공고와 관련된 키워드를 넣어 Recall 확보
     - 도메인 제한 없이 Tavily 기본 검색 사용
     - 가짜/홍보성 페이지 노이즈는 뒤 단계(normalize/rank)에서 걸러냅니다.
     """
-    # TODO[DAY3-F-03]:
-    # 1) 키 읽기
-    # 2) q = f"{query} 모집 공고 지원 사업"
-    # 3) search_tavily(q, key, top_k=topk, timeout=DEFAULT_TIMEOUT)
-    key = os.getenv("TAVILY_API_KEY", "")
-    q = f"{query} 모집 공고 지원 사업"
+    key = api_key or os.getenv("TAVILY_API_KEY", "")
+    
+    # 영상/미디어 관련 키워드가 없으면 자동 추가
+    media_keywords = ["영상", "미디어", "콘텐츠", "스트리밍", "VR", "AR", "AI"]
+    has_media_keyword = any(kw in query for kw in media_keywords)
+    
+    if not has_media_keyword:
+        q = f"{query} 영상 미디어 콘텐츠 모집 공고 지원 사업"
+    else:
+        q = f"{query} 모집 공고 지원 사업"
+    
     results = search_tavily(
         q,
         key,

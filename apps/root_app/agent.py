@@ -17,9 +17,10 @@ from google.adk.models.lite_llm import LiteLlm
 from student.day1.agent import day1_web_agent
 from student.day2.agent import day2_rag_agent
 from student.day3.agent import day3_gov_agent
+from student.day3.pps_agent import day3_pps_agent
 
 # 프롬프트(설명/규칙)
-from student.prompt import ORCHESTRATOR_DESC, ORCHESTRATOR_PROMPT
+from .prompt import ORCHESTRATOR_DESC, ORCHESTRATOR_PROMPT
 
 
 # ------------------------------------------------------------------------------
@@ -27,7 +28,7 @@ from student.prompt import ORCHESTRATOR_DESC, ORCHESTRATOR_PROMPT
 #  - 경량 LLM을 선택하여 LiteLlm(model="...")로 초기화
 #  - 예: "openai/gpt-4o-mini"
 # ------------------------------------------------------------------------------
-MODEL = None  # <- LiteLlm(...)
+MODEL = LiteLlm(model="openai/gpt-4o-mini")
 
 
 # ------------------------------------------------------------------------------
@@ -50,5 +51,6 @@ root_agent = Agent(
         AgentTool(agent=day1_web_agent),
         AgentTool(agent=day2_rag_agent),
         AgentTool(agent=day3_gov_agent),
+        AgentTool(agent=day3_pps_agent),
     ],
 )

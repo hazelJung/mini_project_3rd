@@ -76,37 +76,54 @@ def before_model_callback(
     llm_request: LlmRequest,
     **kwargs,
 ) -> Optional[LlmResponse]:
+    """
+    UI 엔트리포인트 (Day1과 정확히 동일한 패턴):
+      1) llm_request.contents[-1]에서 사용자 메시지 텍스트(query) 추출
+      2) _handle(query) 호출 → payload 획득
+      3) 본문 마크다운 렌더: render_day3(query, payload)
+      4) 저장: save_markdown(query, route='day3', markdown=본문MD) → 경로
+      5) envelope: render_enveloped('day3', query, payload, saved_path)
+      6) LlmResponse로 반환 (AgentTool 호환 형식)
+      7) 예외시 간단한 오류 텍스트 반환
+    """
     try:
-        # 1) 사용자 최근 메시지에서 질의 추출
-        last = llm_request.contents[-1] if llm_request.contents else None
-        query: str = last.parts[0].text if last and getattr(last, "parts", None) else ""
-        if not query:
-            return LlmResponse(text="[DAY3] 질의가 비어있습니다. 사업명이나 키워드를 입력해주세요.")
+        # Day1과 정확히 동일한 패턴
+        last = llm_request.contents[-1]
+        if last.role == "user":
+            query = last.parts[0].text
+            payload = _handle(query)
 
-        # 2) 에이전트 실행
-        payload: Dict[str, Any] = _handle(query)
+            body_md = render_day3(query, payload)
+            saved = save_markdown(query=query, route="day3", markdown=body_md)
+            
+            # saved 반환 형태가 문자열 또는 dict일 수 있으므로 경로 보정
+            if isinstance(saved, dict):
+                saved_path = saved.get("path") or saved.get("filepath") or saved.get("file") or ""
+            else:
+                saved_path = str(saved)
+            
+            enveloped_md = render_enveloped(
+                kind="day3",
+                query=query,
+                payload=payload,
+                saved_path=saved_path,
+            )
 
-        # 3) 본문 마크다운 생성
-        body_md: str = render_day3(query, payload)
-
-        # 4) 저장
-        saved = save_markdown(query=query, route="day3", markdown=body_md)
-
-        # saved 반환 형태가 문자열 또는 dict일 수 있으므로 경로 보정
-        if isinstance(saved, dict):
-            saved_path = saved.get("path") or saved.get("filepath") or saved.get("file") or ""
-        else:
-            saved_path = str(saved)
-
-        # 5) envelope로 감싸기
-        md: str = render_enveloped(kind="day3", query=query, payload=payload, saved_path=saved_path)
-
-        # 6) 응답
-        return LlmResponse(text=md)
-
+            return LlmResponse(
+                content=types.Content(
+                    parts=[types.Part(text=enveloped_md)],
+                    role="model",
+                )
+            )
     except Exception as e:
-        # 필요 시 로깅 가능: logger.exception("Day3 before_model_callback failed", exc_info=e)
-        return LlmResponse(text=f"Day3 에러: {e}")
+        # 강사용: 에러 원인을 바로 확인할 수 있도록 간결 메시지 반환
+        return LlmResponse(
+            content=types.Content(
+                parts=[types.Part(text=f"Day3 에러: {e}")],
+                role="model",
+            )
+        )
+    return None
 
 
 # ------------------------------------------------------------------------------
@@ -115,10 +132,10 @@ def before_model_callback(
 #  - MODEL은 위 TODO[DAY3-A-01]에서 설정한 LiteLlm 인스턴스를 사용합니다.
 # ------------------------------------------------------------------------------
 day3_gov_agent = Agent(
-    name="Day3GovAgent",                        # <- 필요 시 수정
-    model=MODEL,                                # <- TODO[DAY3-A-01]에서 설정
-    description="정부사업 공고/바우처 정보 수집 및 표 제공",   # <- 필요 시 수정 
-    instruction="질의를 기반으로 정부/공공 포털에서 관련 공고를 수집하고 표로 요약해라.", # 프로젝트 목표 결정되면 수정
+    name="Day3GovAgent",
+    model=MODEL,
+    description="영상/미디어 관련 기술 정부사업 공고/바우처 정보 수집 및 분석",
+    instruction="질의를 기반으로 정부/공공 포털(NIPA, BizInfo)에서 영상/미디어 관련 기술 공고를 수집하고 표로 요약해라. 영상 처리, AI/VR/AR, 콘텐츠 제작, 스트리밍 기술, 미디어 플랫폼 관련 공고를 우선적으로 필터링하라.",
     tools=[],
     before_model_callback=before_model_callback,
 )

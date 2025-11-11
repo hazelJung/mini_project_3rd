@@ -53,13 +53,24 @@ def _keyword_score(query: str, title: str, snippet: str) -> float:
     t = (title or "").lower()
     s = (snippet or "").lower()
     hit = 0.0
+    
+    # 영상/미디어 관련 키워드 가점 (영화 투자사 관점)
+    media_keywords = ["영상", "미디어", "콘텐츠", "스트리밍", "vr", "ar", "ai", "영화", "드라마", "ott"]
+    media_bonus = 0.0
+    for kw in media_keywords:
+        if kw in t:
+            media_bonus += 0.3
+        elif kw in s:
+            media_bonus += 0.15
+    
     for tok in toks:
         if tok in t:
             hit += 2.0
         elif tok in s:
             hit += 1.0
     denom = max(1.0, 2.0 * len(toks))
-    return min(1.0, hit / denom)
+    base_score = min(1.0, hit / denom)
+    return min(1.0, base_score + media_bonus)
 
 def _trust_score(source: str) -> float:
     return TRUST.get((source or "").lower(), 0.5)
