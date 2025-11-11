@@ -17,7 +17,7 @@ from typing import List, Dict, Any, Optional
 import os
 
 # Day1에서 제작한 Tavily 래퍼를 재사용합니다.
-from kt_aivle.sub_agents.day1.impl.tavily_client import search_tavily
+from student.day1.impl.tavily_client import search_tavily
 
 DEFAULT_TOPK = 7
 DEFAULT_TIMEOUT = 20
@@ -39,7 +39,23 @@ def fetch_nipa(query: str, topk: int = NIPA_TOPK) -> List[Dict[str, Any]]:
     # 2) 질의 q를 만들 때: f"{query} 공고 모집 지원 site:nipa.kr"
     # 3) search_tavily(q, key, top_k=topk, timeout=DEFAULT_TIMEOUT, include_domains=["nipa.kr"])
     # 4) 그대로 반환
-    raise NotImplementedError("TODO[DAY3-F-01]: NIPA 검색 호출")
+    # 1) API 키 로드
+    key = os.getenv("TAVILY_API_KEY", "")
+
+    # 2) 질의어 구성
+    q = f"{query} 공고 모집 지원 site:nipa.kr"
+
+    # 3) Tavily 검색 (도메인 한정)
+    results = search_tavily(
+        q,
+        key,
+        top_k=int(topk),
+        timeout=DEFAULT_TIMEOUT,
+        include_domains=["nipa.kr"],
+    )
+
+    # 4) 그대로 반환
+    return results or []
 
 def fetch_bizinfo(query: str, topk: int = BIZINFO_TOPK) -> List[Dict[str, Any]]:
     """
@@ -49,7 +65,18 @@ def fetch_bizinfo(query: str, topk: int = BIZINFO_TOPK) -> List[Dict[str, Any]]:
     """
     # TODO[DAY3-F-02]:
     # 위 NIPA와 동일한 패턴이며, site:bizinfo.go.kr / include_domains=["bizinfo.go.kr"] 를 사용
-    raise NotImplementedError("TODO[DAY3-F-02]: Bizinfo 검색 호출")
+    key = os.getenv("TAVILY_API_KEY", "")
+
+    q = f"{query} 공고 모집 지원 site:bizinfo.go.kr"
+
+    results = search_tavily(
+        q,
+        key,
+        top_k=int(topk),
+        timeout=DEFAULT_TIMEOUT,
+        include_domains=["bizinfo.go.kr"],
+    )
+    return results or []
 
 def fetch_web(query: str, topk: int = WEB_TOPK) -> List[Dict[str, Any]]:
     """
@@ -61,7 +88,15 @@ def fetch_web(query: str, topk: int = WEB_TOPK) -> List[Dict[str, Any]]:
     # 1) 키 읽기
     # 2) q = f"{query} 모집 공고 지원 사업"
     # 3) search_tavily(q, key, top_k=topk, timeout=DEFAULT_TIMEOUT)
-    raise NotImplementedError("TODO[DAY3-F-03]: 일반 웹 검색 호출")
+    key = os.getenv("TAVILY_API_KEY", "")
+    q = f"{query} 모집 공고 지원 사업"
+    results = search_tavily(
+        q,
+        key,
+        top_k=int(topk),
+        timeout=DEFAULT_TIMEOUT,
+    )
+    return results or []
 
 def fetch_all(query: str) -> List[Dict[str, Any]]:
     """
@@ -71,4 +106,25 @@ def fetch_all(query: str) -> List[Dict[str, Any]]:
     # TODO[DAY3-F-04]:
     # - 위 세 함수를 순서대로 호출해 리스트를 이어붙여 반환
     # - 실패 시 빈 리스트라도 반환(try/except로 유연 처리 가능)
-    raise NotImplementedError("TODO[DAY3-F-04]: 전체 소스 수집")
+    out: List[Dict[str, Any]] = []
+
+    # NIPA
+    try:
+        out.extend(fetch_nipa(query) or [])
+    except Exception:
+        # 로깅 가능: logger.exception("fetch_nipa failed", exc_info=True)
+        pass
+
+    # Bizinfo
+    try:
+        out.extend(fetch_bizinfo(query) or [])
+    except Exception:
+        pass
+
+    # Web (fallback)
+    try:
+        out.extend(fetch_web(query) or [])
+    except Exception:
+        pass
+
+    return out

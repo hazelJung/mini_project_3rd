@@ -7,10 +7,10 @@ Day3Agent: 정부사업 공고 에이전트(Agent-as-a-Tool)
 """
 
 from __future__ import annotations
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 import os
-from kt_aivle.sub_agents.common.schemas import Day3Plan
+from ...common.schemas import Day3Plan
 
 # 수집 → 정규화 → 랭크 모듈
 from . import fetchers          # NIPA, Bizinfo, 일반 Web 수집
@@ -27,7 +27,27 @@ def _set_source_topk(plan: Day3Plan) -> Day3Plan:
     # 1) plan.nipa_topk, plan.bizinfo_topk, plan.web_topk 값을 정수로 변환해 1 이상으로 보정
     # 2) fetchers.NIPA_TOPK / fetchers.BIZINFO_TOPK / fetchers.WEB_TOPK에 반영
     # 3) 보정한 plan을 반환
-    raise NotImplementedError("TODO[DAY3-I-01]: 소스별 TopK 싱크")
+    import fetchers  # 같은 패키지라면: from . import fetchers
+
+    def _fix(v: Any) -> int:
+        try:
+            iv = int(v)
+        except Exception:
+            iv = 1
+        return iv if iv >= 1 else 1
+
+    # 1) plan 값 보정
+    plan.nipa_topk = _fix(getattr(plan, "nipa_topk", 1))
+    plan.bizinfo_topk = _fix(getattr(plan, "bizinfo_topk", 1))
+    plan.web_topk = _fix(getattr(plan, "web_topk", 1))
+
+    # 2) fetchers 상수에 반영
+    fetchers.NIPA_TOPK = plan.nipa_topk
+    fetchers.BIZINFO_TOPK = plan.bizinfo_topk
+    fetchers.WEB_TOPK = plan.web_topk
+
+    # 3) 보정된 plan 반환
+    return plan
 
 
 class Day3Agent:
@@ -37,7 +57,12 @@ class Day3Agent:
         - 예: os.getenv("TAVILY_API_KEY", "")
         """
         # TODO[DAY3-I-02]: 필요한 키를 읽고, 인스턴스 필드로 보관(옵션)
-        raise NotImplementedError("TODO[DAY3-I-02]: 환경 변수 로딩/저장")
+        import os
+        self.tavily_api_key: str = os.getenv("TAVILY_API_KEY", "")
+        self.openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
+        # 선택 필드들(있으면 내부 fetchers에서 활용)
+        self.http_proxy: str = os.getenv("HTTP_PROXY", os.getenv("http_proxy", ""))
+        self.https_proxy: str = os.getenv("HTTPS_PROXY", os.getenv("https_proxy", ""))
 
     def handle(self, query: str, plan: Day3Plan = Day3Plan()) -> Dict[str, Any]:
         """
@@ -59,4 +84,60 @@ class Day3Agent:
             상위에서 try/except로 감싼다(이번 과제에선 간단 구현 권장).
         """
         # TODO[DAY3-I-03]: 위 단계 구현
-        raise NotImplementedError("TODO[DAY3-I-03]: Day3Agent.handle 파이프라인 구현")
+        # 0) 결과 기본형
+        payload: Dict[str, Any] = {
+            "type": "gov_notices",
+            "query": query or "",
+            "items": [],
+        }
+
+        try:
+            # 1) 소스별 TopK 동기화
+            _set_source_topk(plan)
+
+            # 2) 수집 단계
+            raw: List[Dict[str, Any]] = []
+
+            try:
+                nipa_items = fetchers.fetch_nipa(query, plan.nipa_topk)
+            except Exception:
+                nipa_items = []
+            raw.extend(nipa_items or [])
+
+            try:
+                bizinfo_items = fetchers.fetch_bizinfo(query, plan.bizinfo_topk)
+            except Exception:
+                bizinfo_items = []
+            raw.extend(bizinfo_items or [])
+
+            if getattr(plan, "use_web_fallback", False) and int(getattr(plan, "web_topk", 0)) > 0:
+                try:
+                    # fetch_web 시그니처에 api_key가 있다면 전달, 없다면 무시됩니다.
+                    web_kwargs = {}
+                    if self.tavily_api_key:
+                        web_kwargs["api_key"] = self.tavily_api_key
+                    web_items = fetchers.fetch_web(query, plan.web_topk, **web_kwargs)
+                except Exception:
+                    web_items = []
+                raw.extend(web_items or [])
+
+            # 3) 정규화
+            try:
+                norm = normalize_all(raw)
+            except Exception:
+                norm = []
+
+            # 4) 랭킹/정렬
+            try:
+                ranked = rank_items(norm, query)
+            except Exception:
+                ranked = norm or []
+
+            # 5) 페이로드 구성
+            payload["items"] = ranked
+
+        except Exception as e:
+            # 상위에서 잡을 수 있도록 간단 페이로드 유지
+            payload["error"] = f"Day3 handle error: {e}"
+
+        return payload
