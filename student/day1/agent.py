@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-Day1: 웹+주가+기업개요 에이전트
+Day1: 웹+주가+기업개요 에이전트 
 - 역할: 사용자 질의를 받아 Day1 본체 호출 → 결과 렌더 → 파일 저장(envelope) → 응답
 - 본 파일은 "UI용 래퍼"로, 실질적인 수집/요약 로직은 impl/agent.py 등에 있음.
+- 주의: 학생용과 동일한 TODO 마커/설명을 유지하되, 아래에 '정답 구현'을 채워 넣었습니다.
 """
 
 from __future__ import annotations
@@ -17,11 +18,11 @@ from google.adk.models.lite_llm import LiteLlm
 from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
 
-from student.common.schemas import Day1Plan
-from student.common.writer import render_day1, render_enveloped
-from student.common.fs_utils import save_markdown
-from student.day1.impl.agent import Day1Agent
-
+from ..common.schemas import Day1Plan
+from ..common.writer  import render_day1, render_enveloped
+from ..common.fs_utils import save_markdown
+from .impl.agent  import Day1Agent
+from .impl.web_search import looks_like_ticker
 
 # ------------------------------------------------------------------------------
 # TODO[DAY1-A-01] 모델 선택
@@ -32,11 +33,11 @@ from student.day1.impl.agent import Day1Agent
 #    - LiteLlm(model="openai/gpt-4o-mini")와 같이 할당.
 #    - 모델 문자열은 환경/과금에 맞춰 수정 가능.
 # ------------------------------------------------------------------------------
+# 정답 구현(예시):
 MODEL = LiteLlm(model="openai/gpt-4o-mini")
 
 
 def _extract_tickers_from_query(query: str) -> List[str]:
-    
     """
     사용자 질의에서 '티커 후보'를 추출합니다.
     예시:
@@ -57,22 +58,22 @@ def _extract_tickers_from_query(query: str) -> List[str]:
     #  - 숫자 패턴 예: r"\b\d{6}\b"
     #  - 반환: ['AAPL', '005930'] 형태의 리스트
     # ----------------------------------------------------------------------------
+    # 정답 구현:
+    # 공백/구분자 정리 (슬래시, 콤마 등은 공백으로 치환하여 매칭 안정화)
+    cleaned = re.sub(r"[\/,\|]", " ", query.upper())
 
-    en_pattern = r'\b[A-Z]{1,5}\b' 
-    en_tickers = re.findall(en_pattern, query.upper()) 
+    alpha_hits = re.findall(r"\b[A-Z]{1,5}\b", cleaned)   # 예: AAPL, NVDA, TSLA
+    digit_hits = re.findall(r"\b\d{6}\b", cleaned)        # 예: 005930
 
-    kr_pattern = r'\b\d{6}\b' 
-    kr_tickers = re.findall(kr_pattern, query) 
-
-    all_tickers = [] 
-    seen = set() 
-
-    for ticker in (en_tickers + kr_tickers): 
-        if ticker not in seen: 
-            all_tickers.append(ticker) 
-            seen.add(ticker) 
-
-    return all_tickers 
+    merged = alpha_hits + digit_hits  # 지침에 따라 두 번 찾은 뒤 순차 결합
+    # 중복 제거(앞쪽 우선 유지)
+    deduped: List[str] = []
+    seen = set()
+    for sym in merged:
+        if sym not in seen:
+            deduped.append(sym)
+            seen.add(sym)
+    return deduped
 
 
 def _normalize_kr_tickers(tickers: List[str]) -> List[str]:
@@ -90,22 +91,14 @@ def _normalize_kr_tickers(tickers: List[str]) -> List[str]:
     #  - 맞으면 f"{sym}.KS" 로 변환
     #  - 아니면 원본 유지
     # ----------------------------------------------------------------------------
-    normalized = [] 
-
-    for sym in tickers: 
-        # 6자리 숫자인지 확인 
-        if re.fullmatch(r'\d{6}', sym): 
-            # 이미 .KS가 붙어있는지 확인 
-            if not sym.endswith('.KS'): 
-                normalized.append(f"{sym}.KS") 
-            else: 
-                normalized.append(sym) 
-
+    # 정답 구현:
+    normalized: List[str] = []
+    for sym in tickers:
+        if re.fullmatch(r"\d{6}", sym):
+            normalized.append(f"{sym}.KS")
         else:
-            # 영문 티커는 그대로 유지 
-            normalized.append(sym) 
-
-    return normalized 
+            normalized.append(sym)
+    return normalized
 
 
 def _handle(query: str) -> Dict[str, Any]:
@@ -127,37 +120,66 @@ def _handle(query: str) -> Dict[str, Any]:
     # TODO[DAY1-A-04] 구현 지침
     #  - 1) api_key = os.getenv("TAVILY_API_KEY","")
     #  - 2) tickers = _normalize_kr_tickers(_extract_tickers_from_query(query))
+    #       * 보강: looks_like_ticker()로 실제 티커처럼 생긴 것만 남기기
+    #         (예: "NIPA", "바우처" 같은 일반 단어가 주가 조회로 가지 않도록)
     #  - 3) plan = Day1Plan(
     #         do_web=True,
     #         do_stocks=bool(tickers),
     #         web_keywords=[query],
-    #         tickers=tickers
+    #         tickers=tickers,
+    #         output_style="report",
     #       )
-    #  - 4) agent = Day1Agent(tavily_api_key=api_key)
+    #  - 4) agent = Day1Agent(tavily_api_key=api_key, web_topk=6, request_timeout=20)
     #  - 5) return agent.handle(query, plan)
     # ----------------------------------------------------------------------------
-    
-    # 1) API 키 가져오기 
-    api_key = os.getenv("TAVILY_API_KEY", "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") 
+    # 정답 구현:
+    import os
+    from student.day1.impl.web_search import looks_like_ticker
 
-    # 2) 티커 추출 및 보정 
-    raw_tickers = _extract_tickers_from_query(query) 
-    tickers = _normalize_kr_tickers(raw_tickers) 
+    # 1) API 키
+    api_key = os.getenv("TAVILY_API_KEY", "")
 
-    # 3) Day1Plan 구성 
-    plan = Day1Plan( 
-        do_web=True,                    # 웹 검색은 기본 수행 
-        do_stocks=bool(tickers),        # 티커가 있으면 주가 조회 
-        web_keywords=[query],           # 검색 키워드 
-        tickers=tickers                 # 보정된 티커 리스트 
-    ) 
+    # 2) 티커 추출 → 한국형 보정 → 실제 티커처럼 보이는 것만 남김
+    raw = _extract_tickers_from_query(query)
+    normalized = _normalize_kr_tickers(raw)
+    tickers = [t for t in normalized if looks_like_ticker(t)]
 
-    # 4) Day1Agent 생성 
-    agent = Day1Agent(tavily_api_key=api_key) 
-    # 5) 본체 호출 
-    payload = agent.handle(query, plan) 
+    # 환경변수 기본값 (필요시 .env 에서 조정)
+    risk_trust_only = str(os.getenv("RISK_TRUST_ONLY", "true")).lower() in ("1","true","yes","y")
+    risk_time_range = os.getenv("RISK_TIME_RANGE", "y")   # 'd','w','m','y','all'
+    try:
+        risk_topk = int(os.getenv("RISK_TOPK", "8"))
+    except Exception:
+        risk_topk = 8
 
-    return payload 
+
+    # 3) 계획 구성
+    plan = Day1Plan(
+        do_web=True,
+        do_stocks=bool(tickers),
+        web_keywords=[query],
+        tickers=tickers,
+        output_style="report",    
+
+         # ▼▼ 신규: 리스크 옵션 기본 활성화 ▼▼
+        do_risk=True,
+        risk_trust_only=risk_trust_only,
+        risk_time_range=risk_time_range,
+        risk_topk=risk_topk,
+        risk_keywords=[],  # 사용자가 추가할 경우 주입
+    )
+
+
+    # 4) 에이전트 생성
+    agent = Day1Agent(
+        tavily_api_key=api_key,
+        web_topk=6,
+        request_timeout=20,
+    )
+
+    # 5) 실행
+    return agent.handle(query, plan)
+
 
 
 def before_model_callback(
@@ -186,71 +208,38 @@ def before_model_callback(
     #  - return LlmResponse(content=types.Content(parts=[types.Part(text=md)], role="model"))
     #  - 예외시: "Day1 에러: {e}"
     # ----------------------------------------------------------------------------
-    try: 
-        # 1) 사용자 메시지 추출 
-        if not llm_request.contents: 
-            return LlmResponse( 
-                content=types.Content( 
-                    parts=[types.Part(text="Day1 에러: 메시지가 없습니다.")], 
-                    role="model" 
-                ) 
-            ) 
+    # 정답 구현:
+    try:
+        last = llm_request.contents[-1]
+        if last.role == "user":
+            query = last.parts[0].text
+            payload = _handle(query)
 
-        last_content = llm_request.contents[-1] 
+            body_md = render_day1(query, payload)
+            saved_path = save_markdown(query=query, route="day1", markdown=body_md)
+            enveloped_md = render_enveloped(
+                kind="day1",
+                query=query,
+                payload=payload,
+                saved_path=saved_path,
+            )
 
-        # user 메시지 확인 
-        if last_content.role != "user": 
-            return LlmResponse( 
-                content=types.Content( 
-                    parts=[types.Part(text="Day1 에러: 사용자 메시지가 아닙니다.")], 
-                    role="model" 
-                ) 
-            ) 
+            return LlmResponse(
+                content=types.Content(
+                    parts=[types.Part(text=enveloped_md)],
+                    role="model",
+                )
+            )
+    except Exception as e:
+        # 강사용: 에러 원인을 바로 확인할 수 있도록 간결 메시지 반환
+        return LlmResponse(
+            content=types.Content(
+                parts=[types.Part(text=f"Day1 에러: {e}")],
+                role="model",
+            )
+        )
+    return None
 
-        # 텍스트 추출 
-        if not last_content.parts or not last_content.parts[0].text: 
-            return LlmResponse( 
-                content=types.Content( 
-                    parts=[types.Part(text="Day1 에러: 텍스트가 없습니다.")], 
-                    role="model" 
-                ) 
-            ) 
-        query = last_content.parts[0].text 
-
-        # 2) Day1 본체 호출 
-        payload = _handle(query) 
-
-        # 3) 본문 마크다운 렌더링 
-        body_md = render_day1(query, payload) 
-
-        # 4) 파일 저장 
-        saved_path = save_markdown(query=query, route="day1", markdown=body_md) 
-
-        # 5) envelope 마크다운 생성 
-        envelope_md = render_enveloped( 
-            kind="day1", 
-            query=query, 
-            payload=payload, 
-            saved_path=saved_path 
-        ) 
-
-        # 6) LlmResponse 반환 
-        return LlmResponse( 
-            content=types.Content( 
-                parts=[types.Part(text=envelope_md)], 
-                role="model" 
-            ) 
-        ) 
-         
-    except Exception as e: 
-        # 예외 처리 
-        error_message = f"Day1 에러: {str(e)}" 
-        return LlmResponse( 
-            content=types.Content( 
-                parts=[types.Part(text=error_message)], 
-                role="model" 
-            ) 
-        ) 
 
 # ------------------------------------------------------------------------------
 # TODO[DAY1-A-06] Agent 메타데이터 다듬기
@@ -258,6 +247,7 @@ def before_model_callback(
 #  - description: 에이전트 기능 요약
 #  - instruction: 출력 형태/톤/근거표시 등 지침
 # ------------------------------------------------------------------------------
+# 정답 구현:
 day1_web_agent = Agent(
     name="Day1WebAgent",
     model=MODEL,
