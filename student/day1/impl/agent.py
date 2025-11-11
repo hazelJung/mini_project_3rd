@@ -10,15 +10,16 @@ from typing import Optional, Dict, Any, List, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from google.adk.models.lite_llm import LiteLlm
-from student.common.schemas import Day1Plan
-from student.day1.impl.merge import merge_day1_payload
+from ...common.schemas import Day1Plan
+from .merge import merge_day1_payload
 # 외부 I/O
-from student.day1.impl.tavily_client import search_tavily, extract_url
-from student.day1.impl.finance_client import get_quotes
-from student.day1.impl.web_search import (
+from .tavily_client import search_tavily, extract_url
+from .finance_client import get_quotes
+from .web_search import (
     looks_like_ticker,
     search_company_profile,
     extract_and_summarize_profile,
+    search_risk_issues,     # 리스크 기능 추가
 )
 
 DEFAULT_WEB_TOPK = 6
@@ -30,6 +31,7 @@ DEFAULT_TIMEOUT = 20
 #  - 목적: 기업 개요 본문을 Extract 후 간결 요약
 #  - LiteLlm(model="openai/gpt-4o-mini") 형태로 _SUM에 할당
 # ------------------------------------------------------------------------------
+# 정답 구현:
 _SUM: Optional[LiteLlm] = LiteLlm(model="openai/gpt-4o-mini")
 
 
@@ -45,28 +47,14 @@ def _summarize(text: str) -> str:
     #    응답 객체에서 본문 텍스트를 추출하여 반환
     #  - 예외 발생 시 빈 문자열 반환
     # ----------------------------------------------------------------------------
+    # 정답 구현:
+    if _SUM is None:
+        return ""
     try:
-        prompt = (
-            "다음 텍스트를 3-5문장으로 간결하게 요약하세요. 핵심만:\n"
-            f"{text}\n\n요약:"
-        )
-        if _SUM is None:
-            return ""
-        resp = _SUM.invoke(prompt)
-
-        # 응답 포맷 폴백 처리
-        if hasattr(resp, "content") and resp.content:
-            return str(resp.content).strip()
-        if hasattr(resp, "output_text") and resp.output_text:
-            return str(resp.output_text).strip()
-        if isinstance(resp, dict) and resp.get("content"):
-            return str(resp["content"]).strip()
-        if isinstance(resp, str):
-            return resp.strip()
-        return (str(resp) if resp else "").strip()
-    
-    except Exception as e:
-        print(f"요약 실패: {type(e).__name__}: {e}")
+        resp = _SUM.invoke(text)
+        # google.adk LiteLlm 응답 형태: resp.content.parts[0].text (동일 패턴 유지)
+        return getattr(resp.content.parts[0], "text", "") or ""
+    except Exception:
         return ""
 
 
@@ -84,9 +72,10 @@ class Day1Agent:
         #  self.web_topk = web_topk
         #  self.request_timeout = request_timeout
         # ----------------------------------------------------------------------------
-        self.tavily_api_key = tavily_api_key 
-        self.web_topk = web_topk 
-        self.request_timeout = request_timeout 
+        # 정답 구현:
+        self.tavily_api_key = tavily_api_key
+        self.web_topk = web_topk
+        self.request_timeout = request_timeout
 
     def handle(self, query: str, plan: Day1Plan) -> Dict[str, Any]:
         """
@@ -115,106 +104,78 @@ class Day1Agent:
         #  - 예외: results["errors"].append(f"{kind}: {type(e).__name__}: {e}")
         #  - return merge_day1_payload(results)
         # ----------------------------------------------------------------------------
-# 1) results 스켈레톤 초기화 
+        # 정답 구현:
+        results: Dict[str, Any] = {
+            "type": "web_results",
+            "query": query,
+            "analysis": asdict(plan),
+            "items": [],
+            "tickers": [],
+            "errors": [],
+            "company_profile": "",
+            "profile_sources": [],
+            "risk_items": [],   # 리스크 기능 추가
+        }
 
-        results = { 
-            "type": "web_results", 
-            "query": query, 
-            "analysis": asdict(plan), 
-            "items": [], 
-            "tickers": [], 
-            "errors": [], 
-            "company_profile": "", 
-            "profile_sources": [] 
-        } 
+        futures = {}
+        def submit_profile_job(q: str):
+            # 검색 → 상위 URL 정제 → 추출/요약까지 한 번에 처리
+            def job() -> Tuple[str, List[str]]:
+                search_res = search_company_profile(q, self.tavily_api_key, topk=2, timeout=self.request_timeout)
+                urls = [extract_url(r.get("url")) for r in (search_res or []) if r.get("url")]
+                urls = [u for u in urls if u][:2]
+                if not urls:
+                    return "", []
+                summary = extract_and_summarize_profile(urls, self.tavily_api_key, summarizer=_summarize)
+                return summary or "", urls
+            return job
 
-        futures = {} 
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+            # 웹 검색
+            if plan.do_web:
+                q = " ".join(plan.web_keywords) if plan.web_keywords else query
+                futures[ex.submit(search_tavily, q, self.tavily_api_key, self.web_topk, self.request_timeout)] = "web"
+            # 주가
+            if plan.do_stocks and plan.tickers:
+                futures[ex.submit(get_quotes, plan.tickers, self.request_timeout)] = "stock"
+            # 기업개요: 질의가 티커처럼 보이거나, 계획에 티커가 있는 경우 시도
+            if looks_like_ticker(query) or (plan.tickers and len(plan.tickers) > 0) or ("기업" in query or "회사" in query or "profile" in query.lower()):
+                futures[ex.submit(submit_profile_job(query))] = "profile"
 
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor: 
-            # 웹 검색 작업 제출 
-            if plan.do_web: 
-                # web_keywords가 리스트이므로 첫 번째 키워드 사용 (또는 query 직접 사용) 
-                search_query = plan.web_keywords[0] if (plan.web_keywords and len(plan.web_keywords) > 0) else query 
-                future = executor.submit( 
-                    search_tavily, 
-                    search_query, 
-                    self.tavily_api_key, 
-                    top_k=self.web_topk, 
-                    timeout=self.request_timeout 
-                ) 
-                futures[future] = "web" 
+            # 투자 리스크 모니터링
+            if getattr(plan, "do_risk", False):
+                futures[ex.submit(
+                    search_risk_issues,
+                    query, self.tavily_api_key,
+                    topk=getattr(plan, "risk_topk", 8),
+                    timeout=self.request_timeout,
+                    trust_only=getattr(plan, "risk_trust_only", True),
+                    time_range=getattr(plan, "risk_time_range", "y"),
+                    extra_keywords=getattr(plan, "risk_keywords", []) or []
+                )] = "risk"
 
-            # 주가 조회 작업 제출 
-            if plan.do_stocks and plan.tickers: 
-                future = executor.submit( 
-                    get_quotes, 
-                    plan.tickers 
-                ) 
-                futures[future] = "stock" 
 
-            should_fetch_profile = ( 
-                looks_like_ticker(query) or  
-                (plan.tickers and len(plan.tickers) > 0) 
-            ) 
+            for fut in as_completed(futures):
+                kind = futures[fut]
+                try:
+                    data = fut.result(timeout=self.request_timeout)
+                    if kind == "web":
+                        # search_tavily 표준 반환(list[dict]) 가정
+                        results["items"] = data or []
+                    elif kind == "stock":
+                        # get_quotes 표준 반환(list[dict]) 가정
+                        results["tickers"] = data or []
+                    elif kind == "profile":
+                        # (summary, urls)
+                        summary, urls = data if isinstance(data, tuple) else ("", [])
+                        if summary:
+                            results["company_profile"] = summary
+                        if urls:
+                            results["profile_sources"] = urls[:2]
+                    elif kind == "risk":
+                        results["risk_items"] = data or []
+                except Exception as e:
+                    results["errors"].append(f"{kind}: {type(e).__name__}: {e}")
 
-            if should_fetch_profile: 
-                # 기업 개요 검색 (2단계: URL 검색 → 내용 추출) 
-                def fetch_company_profile():
-                    # 1) 기업 프로필 URL 검색
-                    raw = search_company_profile(query, self.tavily_api_key, topk=2)
-
-                    # 딕셔너리 리스트/문자열 리스트 모두 허용 → URL 문자열 리스트로 정규화
-                    if not raw:
-                        return ("", [])
-                    if isinstance(raw, list):
-                        if all(isinstance(x, dict) for x in raw):
-                            urls = [x.get("url") for x in raw if x.get("url")]
-                        else:
-                            urls = [str(x) for x in raw if x]
-                    else:
-                        urls = [str(raw)]
-
-                    urls = [u for u in urls if u]  # 빈 값 제거
-                    if not urls:
-                        return ("", [])
-
-                    # 2) URL에서 내용 추출 및 요약
-                    # 배포본에 따라 api_key 인자를 안 받는 시그니처가 존재 → 두 형태 모두 시도
-                    try:
-                        profile_text = extract_and_summarize_profile(urls, self.tavily_api_key, summarizer=_summarize)
-                    except TypeError:
-                        profile_text = extract_and_summarize_profile(urls, summarizer=_summarize)
-
-                    return (profile_text or "", urls)
-                
-                future = executor.submit(fetch_company_profile) 
-                futures[future] = "profile" 
-
-            # 3) 완료된 작업 수집 
-            for future in as_completed(futures): 
-                kind = futures[future] 
-                try: 
-                    data = future.result() 
-                    # 작업 종류별 결과 처리 
-                    if kind == "web": 
-                        # 웹 검색 결과 
-                        results["items"] = data if data else [] 
-                    elif kind == "stock": 
-                        # 주가 정보 
-                        results["tickers"] = data if data else [] 
-                    elif kind == "profile": 
-                        # 기업 개요 
-                        if data: 
-                            profile_text, profile_urls = data 
-                            results["company_profile"] = profile_text 
-                            results["profile_sources"] = profile_urls 
-
-                except Exception as e: 
-                    # 에러 기록 
-                    error_msg = f"{kind}: {type(e).__name__}: {str(e)}" 
-                    results["errors"].append(error_msg) 
-                    print(f"⚠️ {error_msg}") 
-
-        # 4) 결과 병합 및 반환 
-        merged_payload = merge_day1_payload(results) 
-        return merged_payload 
+        # 표준 스키마로 병합
+        return merge_day1_payload(results)

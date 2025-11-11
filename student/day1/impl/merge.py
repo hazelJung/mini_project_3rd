@@ -18,10 +18,10 @@ def _top_results(items: List[Dict[str, Any]], k: int = 5) -> List[Dict[str, Any]
     #  - if not items: return []
     #  - return items[: max(0, k)]
     # ----------------------------------------------------------------------------
+    # 정답 구현:
     if not items:
         return []
-
-    return items[:max(0, k)]
+    return items[: max(0, k)]
 
 
 def merge_day1_payload(results: Dict[str, Any]) -> Dict[str, Any]:
@@ -59,41 +59,24 @@ def merge_day1_payload(results: Dict[str, Any]) -> Dict[str, Any]:
     #  - query  = results.get("query", "")
     #  - return {...} 형태로 표준 스키마 dict 생성
     # ----------------------------------------------------------------------------
-
-    # DAY1-M-02: Day1 정규 스키마 매핑 구현
-    # ----------------------------------------------------------------------------
-
-    # 웹 검색 결과 상위 5개 추출
+    # 정답 구현:
     web_top = _top_results(results.get("items"), k=5)
-
-    # 주가 정보 추출
     prices = results.get("tickers", [])
-
-    # 기업 프로필 정보 추출
     company_profile = results.get("company_profile") or ""
-
-    # 프로필 출처 URL 추출
     profile_sources = results.get("profile_sources") or []
-
-    # 에러 목록 추출
     errors = results.get("errors") or []
-
-    # 사용자 쿼리 추출
     query = results.get("query", "")
 
-    # 분석 정보 (옵션)
-    analysis = results.get("analysis", {})
+    # ▼▼ 신규: 리스크 상위 ▼▼
+    risk_top = _top_results(results.get("risk_items"), k=results.get("analysis", {}).get("risk_topk", 8))
 
-    # 표준 스키마로 변환
-    normalized = {
+    return {
         "type": "day1",
         "query": query,
         "web_top": web_top,
         "prices": prices,
         "company_profile": company_profile,
         "profile_sources": profile_sources,
+        "risk_top": risk_top,   # 리스크 기능 추가
         "errors": errors,
-        "analysis": analysis,  # 추가 메타데이터 (필요시)
     }
-
-    return normalized

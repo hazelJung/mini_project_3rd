@@ -1,17 +1,13 @@
 # -*- coding: utf-8 -*-
-import certifi, os
-os.environ["SSL_CERT_FILE"] = certifi.where()
-os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
-os.environ["CURL_CA_BUNDLE"] = certifi.where()
-
 """
 yfinance 가격 조회
 - 목표: 티커 리스트에 대해 현재가/통화를 가져와 표준 형태로 반환
+- 주의: 네트워크/방화벽 환경에 따라 yfinance 호출이 실패할 수 있으므로
+       실패 케이스를 graceful 하게 처리(에러 필드 포함)합니다.
 """
 
 from typing import List, Dict, Any
 import re
-# (강의 안내) yfinance는 외부 네트워크 환경에서 동작. 인터넷 불가 환경에선 모킹이 필요할 수 있음.
 
 
 def _normalize_symbol(s: str) -> str:
@@ -26,11 +22,11 @@ def _normalize_symbol(s: str) -> str:
     #  - if re.fullmatch(r"\d{6}", s): return f"{s}.KS"
     #  - else: return s
     # ----------------------------------------------------------------------------
-    if re.fullmatch(r'\d{6}', s): 
-      return f"{s}.KS"
-    else:
-        return s
-    
+    # 정답 구현:
+    if re.fullmatch(r"\d{6}", s):
+        return f"{s}.KS"
+    return s
+
 
 def get_quotes(symbols: List[str], timeout: int = 20) -> List[Dict[str, Any]]:
     """
@@ -47,31 +43,57 @@ def get_quotes(symbols: List[str], timeout: int = 20) -> List[Dict[str, Any]]:
     #  3) 입력 심볼들을 _normalize_symbol로 보정
     #  4) 각 심볼에 대해:
     #       - t = Ticker(sym)
-    #       - 가격: getattr(t.fast_info, "last_price", None) 또는 t.fast_info.get("last_price")
-    #       - 통화: getattr(t.fast_info, "currency", None)
-    #       - 둘 다 숫자/문자 정상 추출 시 out.append({...})
+    #       - 가격: getattr(t.fast_info, "last_price", None) 또는 dict형이면 .get("last_price")
+    #       - 통화: getattr(t.fast_info, "currency", None)  또는 dict형이면 .get("currency")
+    #       - 둘 다 정상 추출 시 out.append({"symbol": sym, "price": float(price), "currency": cur})
     #       - 예외/누락 시 out.append({"symbol": sym, "error": "설명"})
     #  5) return out
     # ----------------------------------------------------------------------------
-    from yfinance import Ticker, shared
+    # 정답 구현:
+    out: List[Dict[str, Any]] = []
+    try:
+        # 내부 임포트(강의/실습 환경에서 yfinance 미설치 시, 함수 호출 전 단계에서만 실패하게 함)
+        from yfinance import Ticker  # type: ignore
+    except Exception as e:
+        # yfinance 자체가 없는 경우: 전체 심볼에 동일 오류 표기
+        for raw in symbols:
+            sym = _normalize_symbol(raw)
+            out.append({"symbol": sym, "error": f"ImportError: {type(e).__name__}: {e}"})
+        return out
 
-    shared._requests_timeout = timeout
-    out = []
-    for raw_sym in symbols or []:
+    for raw in symbols:
+        sym = _normalize_symbol(raw)
         try:
-            sym = _normalize_symbol(raw_sym)  # 이미 어딘가 정의되어 있다고 가정
             t = Ticker(sym)
-            fi = t.fast_info
 
-            price = getattr(fi, "last_price", None) or fi.get("last_price")
-            currency = getattr(fi, "currency", None) or fi.get("currency")
+            # fast_info는 버전에 따라 dict-like 또는 객체 속성일 수 있으므로 모두 안전 처리
+            fi = getattr(t, "fast_info", None)
 
-            if isinstance(price, (int, float)) and currency:
-                out.append({"symbol": sym, "price": float(price), "currency": str(currency)})
+            price = None
+            currency = None
+            if isinstance(fi, dict):
+                price = fi.get("last_price")
+                currency = fi.get("currency")
             else:
-                out.append({"symbol": sym, "error": "price or currency missing"})
+                # 객체 속성 접근 형태
+                price = getattr(fi, "last_price", None)
+                currency = getattr(fi, "currency", None)
+
+            # 값 검증 및 캐스팅
+            if price is not None:
+                try:
+                    price = float(price)
+                except Exception:
+                    # 숫자로 캐스팅 불가 → 실패 처리
+                    out.append({"symbol": sym, "error": f"ValueError: invalid price '{price}'"})
+                    continue
+
+            if price is None or currency is None:
+                out.append({"symbol": sym, "error": "No fast_info (price/currency missing)"})
+                continue
+
+            out.append({"symbol": sym, "price": price, "currency": currency})
         except Exception as e:
-            out.append({"symbol": raw_sym, "error": str(e)})
+            out.append({"symbol": sym, "error": f"{type(e).__name__}: {e}"})
 
     return out
-
