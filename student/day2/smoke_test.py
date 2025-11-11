@@ -1,251 +1,212 @@
 # -*- coding: utf-8 -*-
 """
-Day2 RAG 스모크 테스트
+넷플릭스 Top 리스트 뽑기 (docs.jsonl → meta.rank 기반)
+- 나라/카테고리는 CLI 인자 또는 query 문장에서 자동 추출
+- 출력 + (옵션) CSV 저장
+
+사용 예:
+python -m student.day2.tools.toplist --index_dir indices/netflix_multi --query "South Korea Movies Top 10" --top_n 10
+python -m student.day2.tools.toplist --index_dir indices/netflix_multi --country "Türkiye" --category Shows --top_n 5 --out_csv out.csv
 """
 
-import os, sys, json, time, argparse
+import json, argparse, re, csv
 from pathlib import Path
+from typing import List, Dict, Any
 
-# ───────── 0) 루트 탐색 + sys.path + .env ─────────
-def _find_root(start: Path) -> Path:
-    for p in [start, *start.parents]:
-        if (p / "pyproject.toml").exists() or (p / ".git").exists() or (p / "apps").exists():
-            return p
-    return start
+# ---------------------------------------------------
+# 0) 국가/카테고리 정규화(별칭 지원)
+# ---------------------------------------------------
+COUNTRY_ALIASES = {
+    "united state": "United States",
+    "united states": "United States",
+    "usa": "United States",
+    "us": "United States",
+    "south korea": "South Korea",
+    "republic of korea": "South Korea",
+    "korea, south": "South Korea",
+    "turkiye": "Türkiye",
+    "türkiye": "Türkiye",
+    "japan": "Japan",
+    "france": "France",
+}
 
-ROOT = _find_root(Path(__file__).resolve())
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+def norm_country(s: str | None) -> str | None:
+    if not s:
+        return None
+    key = s.strip().lower()
+    return COUNTRY_ALIASES.get(key, s.strip())
 
-ENV_PATH = ROOT / ".env"
-def _manual_load_env(p: Path):
-    if not p.exists():
-        return
-    for line in p.read_text(encoding="utf-8", errors="ignore").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        k, v = line.split("=", 1)
-        os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+def norm_category(s: str | None) -> str | None:
+    if not s:
+        return None
+    key = s.strip().lower()
+    if key.startswith("show"):
+        return "Shows"
+    if key.startswith("movie"):
+        return "Movies"
+    return s.strip().capitalize()
 
-try:
-    from dotenv import load_dotenv
-    load_dotenv(ENV_PATH, override=False)
-except Exception:
-    _manual_load_env(ENV_PATH)
-
-# ───────── 1) 배포 모듈 임포트 ─────────
-def _import_all():
-    from student.day2.impl.rag import Day2Agent
-    from student.common.schemas import Day2Plan
-    from student.day2.impl.store import FaissStore
-    from student.day2.impl.embeddings import Embeddings
-    from student.day2.impl.build_index import build_index
-    return Day2Agent, Day2Plan, FaissStore, Embeddings, build_index
-
-Day2Agent, Day2Plan, FaissStore, Embeddings, build_index = _import_all()
-
-# ───────── 2) 유틸 ─────────
-def _idx_paths(index_dir: str):
-    d = Path(index_dir)
-    return d / "faiss.index", d / "docs.jsonl"
-
-def _file_info(p: Path) -> str:
-    try:
-        return f"{p} ({p.stat().st_size:,} bytes)"
-    except Exception:
-        return f"{p} (size: ?)"""
-
-def _read_docs_head(docs_path: Path, n: int = 5):
-    lines = docs_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+# ---------------------------------------------------
+# 1) 데이터 로드/선택
+# ---------------------------------------------------
+def load_docs(docs_path: Path) -> List[Dict[str, Any]]:
     out = []
-    empty_cnt = 0
-    for i, ln in enumerate(lines[:n]):
+    for ln in docs_path.read_text(encoding="utf-8", errors="ignore").splitlines():
         try:
-            obj = json.loads(ln)
-            text = (obj.get("text") or "").strip()
-            if not text:
-                empty_cnt += 1
-            out.append({"i": i, "id": obj.get("id"), "path": obj.get("path"), "len": len(text)})
+            out.append(json.loads(ln))
         except Exception:
-            out.append({"i": i, "parse_error": True})
-    return len(lines), empty_cnt, out
-
-def _estimate_store_size(store) -> str:
-    """FaissStore 구현마다 다른 경우를 모두 수용해 사이즈 추정."""
-    # 1) __len__
-    try:
-        return str(len(store))
-    except Exception:
-        pass
-    # 2) size() 메서드
-    try:
-        s = store.size() if callable(getattr(store, "size", None)) else None
-        if s is not None:
-            return str(int(s))
-    except Exception:
-        pass
-    # 3) ntotal 속성 직접/내부 index 통해
-    try:
-        n = getattr(store, "ntotal", None)
-        if n is not None:
-            return str(int(n))
-    except Exception:
-        pass
-    try:
-        idx = getattr(store, "index", None)
-        if idx is not None:
-            n = getattr(idx, "ntotal", None)
-            if n is not None:
-                return str(int(n))
-    except Exception:
-        pass
-    # 4) 알 수 없음
-    return "?"
-
-# ───────── 3) 인덱스/FAISS/임베딩 진단 ─────────
-def _diagnose(index_dir: str, paths: str, model: str, autobuild: bool, batch_size: int):
-    idx_path, docs_path = _idx_paths(index_dir)
-    ok = True
-    if not idx_path.exists():
-        print("[WARN] faiss.index 없음 →", idx_path)
-        ok = False
-    if not docs_path.exists():
-        print("[WARN] docs.jsonl 없음  →", docs_path)
-        ok = False
-    if not ok:
-        if not autobuild:
-            print("  해결: 인덱스 생성")
-            print(f"  uv run python -m student.day2.impl.build_index --paths {paths} --index_dir {index_dir} --model {model} --batch_size {batch_size}")
-            return None, None
-        print("[INFO] --autobuild 지정 → 인덱스 생성 시작")
-        build_index(paths, index_dir, model, batch_size)
-
-    # 파일 정보
-    print("[INFO] 인덱스 파일:", _file_info(idx_path))
-    print("[INFO] 문서 파일  :", _file_info(docs_path))
-    try:
-        total, empty_cnt, head = _read_docs_head(docs_path, n=5)
-        print(f"[OK] docs.jsonl 라인수={total}, (빈 텍스트 {empty_cnt})")
-        for r in head:
-            print("   ", r)
-    except Exception as e:
-        print("[WARN] docs.jsonl 파싱 이슈:", e)
-
-    # FAISS 로드
-    try:
-        store = FaissStore.load(str(idx_path), str(docs_path))
-        print("[OK] FAISS 로드 성공")
-    except Exception as e:
-        print("[FAIL] FAISS 로드 실패:", e)
-        return None, None
-
-    # 임베딩 초기화 + 차원 확인
-    try:
-        emb = Embeddings(model=model, batch_size=4)
-        dim = emb.encode(["__dim_check__"]).shape[1]
-        print(f"[OK] 임베딩 초기화: model={model}, dim={dim}")
-    except Exception as e:
-        print("[FAIL] 임베딩 초기화 실패:", e)
-        return store, None
-
-    # store.dim 출력(없으면 넘어감)
-    try:
-        print(f"[INFO] store.dim = {getattr(store, 'dim')}")
-    except Exception:
-        pass
-
-    # 사이즈 추정
-    size_hint = _estimate_store_size(store)
-    print(f"[INFO] 인덱스 사이즈(추정) = {size_hint}")
-
-    # 차원 불일치 검사 (가능할 때만)
-    try:
-        sdim = getattr(store, "dim")
-        if sdim and sdim != dim:
-            print(f"[FAIL] 차원 불일치: index_dim={sdim}, embed_dim={dim}")
-            print("  해결: 인덱스를 동일 모델로 재생성하거나, 스모크의 --model 값을 맞추세요.")
-    except Exception:
-        # store.dim이 없으면 스킵 (구현체별 차이)
-        pass
-
-    return store, dim
-
-# ───────── 4) 검색 + Agent.handle ─────────
-def _run_search_and_agent(query: str, index_dir: str, model: str, top_k: int):
-    from student.day2.impl.rag import Day2Agent
-    from student.common.schemas import Day2Plan
-    from student.day2.impl.embeddings import Embeddings
-    from student.day2.impl.store import FaissStore
-
-    # 임베딩/스토어 준비
-    emb = Embeddings(model=model, batch_size=4)
-    qv = emb.encode([query])[0]
-    store = FaissStore.load(str(Path(index_dir)/"faiss.index"), str(Path(index_dir)/"docs.jsonl"))
-
-    # 로우 검색
-    try:
-        hits = store.search(qv, top_k=top_k)
-        print(f"[OK] 로우 검색 hit={len(hits)} (상위 3개 미리보기)")
-        for i, h in enumerate(hits[:3], 1):
-            score = float(h.get("score", 0.0))
-            path = str(h.get("path") or h.get("id") or "")
-            text = (h.get("text") or h.get("chunk") or "").replace("\n"," ").strip()[:160]
-            print(f"   {i:>2}. {score:.3f} | {path} | {text}")
-    except Exception as e:
-        print("[FAIL] 로우 검색 실패:", e)
-
-    # Agent.handle
-    plan = Day2Plan(index_dir=index_dir, embedding_model=model, top_k=top_k,
-                    force_rag_only=True, return_draft_when_enough=True)
-    agent = Day2Agent(plan_defaults=plan)
-    out = agent.handle(query)
-    print(f"[OK] Agent.handle 완료 | gating={out.get('gating')} | ctx={len(out.get('contexts', []))}")
-    if out.get("answer"):
-        print("\n[OK] 초안 요약(일부):")
-        print(out["answer"][:400] + ("..." if len(out["answer"]) > 400 else ""))
+            pass
     return out
 
-# ───────── 5) 리포트 저장 ─────────
-def _save_report(query: str, index_dir: str, model: str, payload: dict):
-    out_dir = ROOT / "data" / "processed"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    ts = time.strftime("%Y%m%d_%H%M%S")
-    path = out_dir / f"{ts}__day2_smoke__{query.replace(' ','-')}.json"
-    path.write_text(json.dumps({
-        "query": query,
-        "index_dir": index_dir,
-        "model": model,
-        "result": payload,
-    }, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"[OK] 진단 리포트 저장: {path}")
+def available_values(docs: List[Dict[str, Any]]):
+    countries = set()
+    categories = set()
+    for r in docs:
+        m = r.get("meta", {}) or {}
+        if m.get("country"):
+            countries.add(m["country"])
+        if m.get("category"):
+            categories.add(m["category"])
+    return sorted(countries), sorted(categories)
 
-# ───────── Entry ─────────
+def pick_top(docs: List[Dict[str, Any]], country: str | None, category: str | None, top_n: int | None):
+    want_c = norm_country(country) if country else None
+    want_cat = norm_category(category) if category else None
+
+    rows = []
+    for r in docs:
+        meta = r.get("meta", {}) or {}
+        title = (r.get("text") or "").strip()
+        rank = meta.get("rank")
+        if not title or rank is None:
+            continue
+        if want_c and meta.get("country") != want_c:
+            continue
+        if want_cat and (meta.get("category") or "").capitalize() != want_cat:
+            continue
+        rows.append({
+            "rank": int(rank),
+            "title": title,
+            "country": meta.get("country"),
+            "category": meta.get("category"),
+            "weeks_in_top": meta.get("weeks_in_top"),
+        })
+    rows.sort(key=lambda x: x["rank"])
+    if top_n:
+        rows = [x for x in rows if x["rank"] <= top_n]
+    return rows
+
+# ---------------------------------------------------
+# 2) query에서 나라/카테고리 자동 추출
+#    - docs.jsonl에 존재하는 값들 기반으로 매칭 → 오탐 최소화
+# ---------------------------------------------------
+def parse_from_query(q: str, known_countries: List[str], known_categories: List[str]):
+    """
+    query 문장에서 country, category, top_n 자동 추출
+    """
+    if not q:
+        return None, None, None
+
+    qnorm = " " + re.sub(r"\s+", " ", q).strip() + " "
+    cand_country = None
+    cand_category = None
+    cand_topn = None
+
+    # (1) 카테고리 빠르게 추출
+    if re.search(r"\bshow(s)?\b", qnorm, flags=re.I):
+        cand_category = "Shows"
+    elif re.search(r"\bmovie(s)?\b", qnorm, flags=re.I):
+        cand_category = "Movies"
+
+    # (2) 국가명은 known 목록을 길이순으로 탐색 (긴 이름 우선 매칭)
+    for name in sorted(known_countries, key=len, reverse=True):
+        pattern = r"\b" + re.escape(name) + r"\b"
+        if re.search(pattern, qnorm, flags=re.I):
+            cand_country = name
+            break
+
+    # (3) 별칭도 시도 (예: turkiye, usa 등)
+    if not cand_country:
+        for alias, canon in COUNTRY_ALIASES.items():
+            pattern = r"\b" + re.escape(alias) + r"\b"
+            if re.search(pattern, qnorm, flags=re.I):
+                if canon in known_countries:
+                    cand_country = canon
+                    break
+
+    # (4) Top N 숫자 추출
+    # ex: "top 10", "Top5", "상위 3", "TOP-20", "top10 movies"
+    m = re.search(r"(?:top|상위)\s*[-_#:]?\s*(\d{1,3})", qnorm, flags=re.I)
+    if m:
+        try:
+            cand_topn = int(m.group(1))
+        except Exception:
+            pass
+
+    return cand_country, cand_category, cand_topn
+
+
+# ---------------------------------------------------
+# 3) CLI
+# ---------------------------------------------------
 def parse_args():
-    import argparse
-    p = argparse.ArgumentParser(description="Day2 RAG 스모크/디버그(meta 의존 제거판)")
-    p.add_argument("--index_dir", default="indices/day2")
-    p.add_argument("--paths", default="data/raw")
-    p.add_argument("--model", default="text-embedding-3-small")
-    p.add_argument("--batch_size", type=int, default=128)
-    p.add_argument("--query", default="헬스케어 규제")
-    p.add_argument("--top_k", type=int, default=5)
-    p.add_argument("--autobuild", action="store_true")
+    p = argparse.ArgumentParser(description="넷플릭스 TOP 리스트(랭크 기반) 조회기")
+    p.add_argument("--index_dir", required=True, help="faiss.index + docs.jsonl가 있는 폴더")
+    p.add_argument("--query", default=None, help='예: "South Korea Movies top 10"')
+    p.add_argument("--country", default=None)
+    p.add_argument("--category", default=None, choices=["Movies","Shows","movies","shows"])
+    p.add_argument("--top_n", type=int, default=10)
+    p.add_argument("--out_csv", default=None)
     return p.parse_args()
 
 def main():
     args = parse_args()
-    print("[INFO] ROOT:", ROOT)
-    print("[INFO] .env :", ENV_PATH, "| OPENAI_API_KEY:", bool(os.getenv("OPENAI_API_KEY")))
-    print("[INFO] index:", args.index_dir, "| paths:", args.paths, "| model:", args.model)
+    docs_path = Path(args.index_dir) / "docs.jsonl"
+    if not docs_path.exists():
+        raise SystemExit(f"docs.jsonl not found: {docs_path}")
 
-    store, dim = _diagnose(args.index_dir, args.paths, args.model, args.autobuild, args.batch_size)
-    if store is None:
-        sys.exit(2)
+    docs = load_docs(docs_path)
+    countries, categories = available_values(docs)
 
-    out = _run_search_and_agent(args.query, args.index_dir, args.model, args.top_k)
-    _save_report(args.query, args.index_dir, args.model, out)
-    print("\n[DONE] Day2 스모크 테스트 완료")
+    # 1) query에서 추출
+    q_country, q_category, q_topn = parse_from_query(args.query or "", countries, categories)
+ 
+
+    # 2) CLI 인자가 있으면 우선
+    country = q_country or args.country
+    category = q_category or args.category 
+    top_n = q_topn or args.top_n 
+
+    # 3) 최종 정규화
+    country = norm_country(country) if country else country
+    category = norm_category(category) if category else category
+
+    # 4) 조회
+    rows = pick_top(docs, country, category, top_n)
+
+    # 5) 출력
+    hdr = f"{country or 'ALL'} / {category or 'ALL'} / Top {top_n}"
+    print(f"\n[TOP LIST] {hdr}")
+    if not rows:
+        print("  (비었습니다. country/category/top_n을 확인하세요)")
+        # 힌트: 사용 가능한 값 프린트
+        print("\n[HINT] Available countries:", ", ".join(countries))
+        print("[HINT] Available categories:", ", ".join(categories))
+        return
+
+    for r in rows:
+        wk = f" ({r['weeks_in_top']}w)" if r.get("weeks_in_top") is not None else ""
+        print(f"  {r['rank']:02d}. {r['title']}{wk}")
+
+    # 6) CSV 저장
+    if args.out_csv:
+        outp = Path(args.out_csv)
+        outp.parent.mkdir(parents=True, exist_ok=True)
+        with open(outp, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+            w.writeheader()
+            w.writerows(rows)
+        print(f"\n[OK] CSV saved: {outp}")
 
 if __name__ == "__main__":
     main()

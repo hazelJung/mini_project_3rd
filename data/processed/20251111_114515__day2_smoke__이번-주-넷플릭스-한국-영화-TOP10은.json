@@ -1,0 +1,93 @@
+{
+  "query": "이번 주 넷플릭스 한국 영화 TOP10은?",
+  "index_dir": ".\\indices\\netflix_kr_movies",
+  "model": "text-embedding-3-small",
+  "result": {
+    "type": "rag_answer",
+    "query": "이번 주 넷플릭스 한국 영화 TOP10은?",
+    "plan": {
+      "index_dir": ".\\indices\\netflix_kr_movies",
+      "top_k": 5,
+      "min_score": 0.32,
+      "min_mean_topk": 0.3,
+      "force_rag_only": true,
+      "return_draft_when_enough": true,
+      "max_context": 1200,
+      "embedding_model": "text-embedding-3-small"
+    },
+    "contexts": [
+      {
+        "doc_id": "netflix://South Korea/Movies/item_03::chunk_0000",
+        "chunk": "KPop Demon Hunters",
+        "score": 0.29878824949264526,
+        "meta": {
+          "path": "netflix://South Korea/Movies/item_03",
+          "chunk": 0,
+          "country": "South Korea",
+          "category": "Movies",
+          "rank": 3,
+          "weeks_in_top": 20
+        }
+      },
+      {
+        "doc_id": "netflix://South Korea/Movies/item_01::chunk_0000",
+        "chunk": "Good News",
+        "score": 0.22208625078201294,
+        "meta": {
+          "path": "netflix://South Korea/Movies/item_01",
+          "chunk": 0,
+          "country": "South Korea",
+          "category": "Movies",
+          "rank": 1,
+          "weeks_in_top": 3
+        }
+      },
+      {
+        "doc_id": "netflix://South Korea/Movies/item_07::chunk_0000",
+        "chunk": "The Killers",
+        "score": 0.19909197092056274,
+        "meta": {
+          "path": "netflix://South Korea/Movies/item_07",
+          "chunk": 0,
+          "country": "South Korea",
+          "category": "Movies",
+          "rank": 7,
+          "weeks_in_top": 1
+        }
+      },
+      {
+        "doc_id": "netflix://South Korea/Movies/item_04::chunk_0000",
+        "chunk": "28 Years Later",
+        "score": 0.19021110236644745,
+        "meta": {
+          "path": "netflix://South Korea/Movies/item_04",
+          "chunk": 0,
+          "country": "South Korea",
+          "category": "Movies",
+          "rank": 4,
+          "weeks_in_top": 3
+        }
+      },
+      {
+        "doc_id": "netflix://South Korea/Movies/item_10::chunk_0000",
+        "chunk": "Yadang: The Snitch",
+        "score": 0.18143844604492188,
+        "meta": {
+          "path": "netflix://South Korea/Movies/item_10",
+          "chunk": 0,
+          "country": "South Korea",
+          "category": "Movies",
+          "rank": 10,
+          "weeks_in_top": 8
+        }
+      }
+    ],
+    "gating": {
+      "status": "insufficient",
+      "top_score": 0.29878824949264526,
+      "mean_topk": 0.21832320392131804
+    },
+    "answer": "질의: 이번 주 넷플릭스 한국 영화 TOP10은?\n\n핵심 근거 요약:\n- KPop Demon Hunters\n- Good News\n- The Killers\n- 28 Years Later\n- Yadang: The Snitch",
+    "notice": "web_merge_in_day4_only"
+  }
+}
