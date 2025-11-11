@@ -21,6 +21,7 @@ from .web_search import (
     extract_and_summarize_profile,
     search_risk_issues,     # 리스크 기능 추가
 )
+from .multi_score import run_multisource_trend_report
 
 DEFAULT_WEB_TOPK = 6
 MAX_WORKERS = 4
@@ -114,7 +115,9 @@ class Day1Agent:
             "errors": [],
             "company_profile": "",
             "profile_sources": [],
-            "risk_items": [],   # 리스크 기능 추가
+            "risk_items": [],   # 리스크 기능
+            "trend_markdown": "",
+            "trend_scores": [],
         }
 
         futures = {}
@@ -154,6 +157,26 @@ class Day1Agent:
                     extra_keywords=getattr(plan, "risk_keywords", []) or []
                 )] = "risk"
 
+            # 신규: 트렌드
+            if getattr(plan, "do_trend", False) and getattr(plan, "trend_topics", []):
+                def _trend_job():
+                    out = run_multisource_trend_report(
+                        topics=plan.trend_topics,
+                        days=getattr(plan, "trend_days", 90),
+                        recent_days=getattr(plan, "trend_recent_days", 14),
+                        base_days=getattr(plan, "trend_base_days", 14),
+                    )
+                    # score_df 는 pandas DF — 직렬화가 필요하면 records로
+                    score_df = out.get("score_df")
+                    scores = []
+                    if score_df is not None and getattr(score_df, "empty", True) is False:
+                        try:
+                            scores = score_df.reset_index().to_dict(orient="records")
+                        except Exception:
+                            pass
+                    return out.get("markdown") or "", scores
+
+                futures[ex.submit(_trend_job)] = "trend"
 
             for fut in as_completed(futures):
                 kind = futures[fut]
@@ -174,6 +197,10 @@ class Day1Agent:
                             results["profile_sources"] = urls[:2]
                     elif kind == "risk":
                         results["risk_items"] = data or []
+                    elif kind == "trend":
+                        md, scores = data if isinstance(data, tuple) else ("", [])
+                        results["trend_markdown"] = md
+                        results["trend_scores"] = scores
                 except Exception as e:
                     results["errors"].append(f"{kind}: {type(e).__name__}: {e}")
 

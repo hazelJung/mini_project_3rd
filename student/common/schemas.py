@@ -15,21 +15,19 @@ class Day1Plan:
     tickers: List[str] = field(default_factory=list)
     output_style: str = "report"  # "report" | "summary"
 
-        # ▼▼ 신규: 투자 리스크 모니터링 옵션 ▼▼
-    do_risk: bool = False                         # 리스크 검색 수행 여부
-    risk_keywords: List[str] = field(default_factory=list)  # 사용자 추가 키워드
-    risk_trust_only: bool = True                  # 신뢰 도메인만 제한할지
-    risk_time_range: str = "y"                    # 'd'|'w'|'m'|'y'|'all' (Tavily)
-    risk_topk: int = 8                            # 상위 몇 개까지 노출
+    # ▼▼ 투자 리스크 모니터링 옵션 ▼▼
+    do_risk: bool = False
+    risk_keywords: List[str] = field(default_factory=list)
+    risk_trust_only: bool = True
+    risk_time_range: str = "y"
+    risk_topk: int = 8
 
-# (선택) 웹 결과 아이템이 dataclass라면, "기본값 없는 필드 먼저" 규칙 엄수
-@dataclass
-class WebResultItem:
-    url: str                       # <- 기본값 없음 (필수) 먼저!
-    title: str = ""
-    source: str = ""
-    snippet: str = ""
-    date: str = ""
+    # ▼▼ 신규: 트렌드 분석 옵션 ▼▼
+    do_trend: bool = False                          # 트렌드 분석 수행 여부
+    trend_topics: List[str] = field(default_factory=list)  # ["넷플릭스","티빙",...]
+    trend_days: int = 90                            # 전체 조회 기간 (예: 90일)
+    trend_recent_days: int = 14                     # 최근 기간 윈도우
+    trend_base_days: int = 14                       # 비교 기준 윈도우
 
 # -------------------------
 # Day2: RAG Plan

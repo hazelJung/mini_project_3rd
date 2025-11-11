@@ -2,7 +2,7 @@
 """
 Day1 스모크 테스트 (루트 .env 로드 + sys.path 보정 + 견고한 폴백 출력)
 - 이 파일만 수정/실행합니다. 배포된 모듈은 건드리지 않습니다.
-- 추가: 투자 리스크 모니터링(search_risk_issues) 테스트 + E2E 옵션
+- 추가: 투자 리스크 모니터링 + 트렌드 + E2E 옵션
 """
 # --- 0) 프로젝트 루트 탐색 + sys.path 보정 + .env 로드 ---
 import os, sys, json
@@ -38,8 +38,9 @@ except Exception:
 from student.day1.impl.web_search import (
     search_company_profile,
     extract_and_summarize_profile,
-    search_risk_issues,   # ★ 신규: 리스크 모니터링용
+    search_risk_issues,
 )
+from student.day1.impl.multi_score import run_multisource_trend_report
 
 def _bool_env(key: str, default: bool) -> bool:
     v = os.getenv(key)
@@ -52,18 +53,18 @@ def _check_keys() -> bool:
     if not os.getenv("TAVILY_API_KEY"):
         print("[FAIL] 환경변수 TAVILY_API_KEY가 없습니다. 루트 .env를 확인하세요.")
         ok = False
+    if not os.getenv("NAVER_CLIENT_ID") or not os.getenv("NAVER_CLIENT_SECRET"):
+        print("[WARN] NAVER DataLab 키(NAVER_CLIENT_ID/SECRET)가 없습니다. 트렌드 보고서는 빈 결과일 수 있습니다.")
     return ok
 
 # (개선) 시세 스냅샷: get_quotes → yfinance → 패스
 def _try_fetch_prices(symbols):
-    # ① 우리 모듈의 get_quotes 사용
     try:
         from student.day1.impl.finance_client import get_quotes
         data = get_quotes(symbols, timeout=20)
         return data or []
     except Exception:
         pass
-    # ② yfinance로 간단 조회(스모크용)
     try:
         import yfinance as yf
         out = []
@@ -81,11 +82,9 @@ def _try_fetch_prices(symbols):
             out.append({"symbol": s, "price": float(price) if price else None, "currency": currency})
         return out
     except Exception:
-        # ③ 완전 패스 (스모크에 필수 아님)
         return []
 
 def _fake_summarizer(prompt: str) -> str:
-    # 내부 요약기가 500자 이상만 채택할 수 있어 빈 요약이 생기는 걸 방지
     return prompt[-300:] if len(prompt) > 300 else prompt
 
 def _print_risk_items(items, limit=6):
@@ -108,15 +107,28 @@ def _print_risk_items(items, limit=6):
             print("     >", (snip[:160] + ("..." if len(snip) > 160 else "")))
         print("     ", url)
 
+def _print_trend(scores, markdown, limit=5):
+    if markdown:
+        print("\n[OK] 트렌드 마크다운 프리뷰:")
+        print(markdown[:800] + ("..." if len(markdown) > 800 else ""))
+    if scores:
+        print(f"\n[OK] 트렌드 점수 상위 {min(limit, len(scores))}/{len(scores)}개:")
+        for i, r in enumerate(scores[:limit], 1):
+            name = r.get("topic") or r.get("name") or "(topic)"
+            s = r.get("score") or r.get("recent_vs_base") or r.get("delta")
+            print(f"  {i}. {name} — score={s}")
+    if not markdown and not scores:
+        print("\n[WARN] 트렌드 결과가 없습니다. (키/토픽/기간 확인)")
+
 def _try_e2e_day1(query_for_all: str):
-    """
-    (옵션) Day1Agent 엔드투엔드 실행: E2E=1 일 때만 수행
-    - do_web=True, do_risk=True 로 묶어 payload에 risk_top 포함 여부 확인
-    """
     try:
         from student.day1.impl.agent import Day1Agent
         from student.common.schemas import Day1Plan
         tavily_key = os.getenv("TAVILY_API_KEY")
+        trend_topics = [s.strip() for s in os.getenv("TREND_TOPICS", "").split(",") if s.strip()]
+        trend_days = int(os.getenv("TREND_DAYS", "90"))
+        trend_recent = int(os.getenv("TREND_RECENT_DAYS", "14"))
+        trend_base = int(os.getenv("TREND_BASE_DAYS", "14"))
         plan = Day1Plan(
             do_web=True,
             do_stocks=False,
@@ -128,6 +140,11 @@ def _try_e2e_day1(query_for_all: str):
             risk_time_range=os.getenv("RISK_TIME_RANGE", "y"),
             risk_topk=int(os.getenv("RISK_TOPK", "8")),
             risk_keywords=[s.strip() for s in os.getenv("RISK_EXTRA", "").split(",") if s.strip()],
+            do_trend=bool(trend_topics),
+            trend_topics=trend_topics,
+            trend_days=trend_days,
+            trend_recent_days=trend_recent,
+            trend_base_days=trend_base,
         )
         agent = Day1Agent(tavily_api_key=tavily_key, web_topk=6, request_timeout=20)
         payload = agent.handle(query_for_all, plan)
@@ -135,6 +152,7 @@ def _try_e2e_day1(query_for_all: str):
         risk = payload.get("risk_top") or []
         print(f"[E2E] risk_top count: {len(risk)}")
         _print_risk_items(risk, limit=5)
+        _print_trend(payload.get("trend_scores") or [], payload.get("trend_markdown") or "")
     except Exception as e:
         print(f"[WARN] E2E 실행 실패: {type(e).__name__}: {e}")
 
@@ -144,14 +162,15 @@ def main():
 
     tavily_key = os.getenv("TAVILY_API_KEY")
 
-    # --- 입력 파라미터 / 기본값 ---
-    # argv[1]: 기업 개요 테스트용 쿼리, argv[2]: 리스크 테스트용 쿼리
-    profile_query = sys.argv[1] if len(sys.argv) > 1 else "에스케이재원원"
-    risk_query    = sys.argv[2] if len(sys.argv) > 2 else "성시경"
+    # argv[1]: 프로필 쿼리, argv[2]: 리스크 쿼리, argv[3]: 트렌드 토픽 CSV
+    profile_query = sys.argv[1] if len(sys.argv) > 1 else "삼성전자 기업 개요"
+    risk_query    = sys.argv[2] if len(sys.argv) > 2 else "테슬라 리콜"
+    trend_topics  = sys.argv[3] if len(sys.argv) > 3 else os.getenv("TREND_TOPICS", "넷플릭스,디즈니플러스,티빙")
+    topics = [s.strip() for s in trend_topics.split(",") if s.strip()]
 
-    # 리스크 옵션 (환경변수로도 제어 가능)
-    risk_trust_only = _bool_env("RISK_TRUST_ONLY", True)       # true면 신뢰 도메인만
-    risk_time_range = os.getenv("RISK_TIME_RANGE", "y")         # d|w|m|y|all
+    # 리스크 옵션
+    risk_trust_only = _bool_env("RISK_TRUST_ONLY", True)
+    risk_time_range = os.getenv("RISK_TIME_RANGE", "y")
     try:
         risk_topk = int(os.getenv("RISK_TOPK", "8"))
     except Exception:
@@ -160,6 +179,7 @@ def main():
 
     print("[INFO] profile_query:", profile_query)
     print("[INFO] risk_query   :", risk_query)
+    print("[INFO] trend_topics :", topics)
     print("[INFO] risk_opts    :", {"trust_only": risk_trust_only, "time_range": risk_time_range, "topk": risk_topk, "extra": risk_extra})
 
     # 1) 기업 개요 후보 URL 검색
@@ -172,7 +192,6 @@ def main():
     try:
         summary = extract_and_summarize_profile(urls, tavily_key, _fake_summarizer)
     except TypeError:
-        # 환경에 따라 시그니처 차이를 고려한 폴백
         try:
             from student.day1.impl.web_search import extract_and_summarize_profile as _ex2
             summary = _ex2(urls, _fake_summarizer)  # api_key 없이
@@ -203,15 +222,32 @@ def main():
             tavily_key,
             topk=risk_topk,
             timeout=20,
-            trust_only=risk_trust_only,
-            time_range=risk_time_range,
-            extra_keywords=risk_extra,
+            trust_only= risk_trust_only,
+            time_range= risk_time_range,
+            extra_keywords= risk_extra,
         )
         _print_risk_items(risk_items, limit=min(6, risk_topk))
     except Exception as e:
         print(f"[FAIL] 리스크 검색 실패: {type(e).__name__}: {e}")
 
-    # 5) (옵션) End-to-End Day1 실행
+    # 5) 검색 트렌드 테스트
+    print("\n[TEST] 검색 트렌드 실행...")
+    try:
+        out = run_multisource_trend_report(
+            topics=topics,
+            days=int(os.getenv("TREND_DAYS", "90")),
+            recent_days=int(os.getenv("TREND_RECENT_DAYS", "14")),
+            base_days=int(os.getenv("TREND_BASE_DAYS", "14")),
+        )
+        score_df = (out or {}).get("score_df")
+        scores = []
+        if score_df is not None and getattr(score_df, "empty", True) is False:
+            scores = score_df.reset_index().to_dict(orient="records")
+        _print_trend(scores, (out or {}).get("markdown") or "")
+    except Exception as e:
+        print(f"[FAIL] 트렌드 실행 실패: {type(e).__name__}: {e}")
+
+    # 6) (옵션) End-to-End Day1 실행
     if _bool_env("E2E", False):
         _try_e2e_day1(risk_query)
 

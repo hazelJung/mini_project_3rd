@@ -25,41 +25,6 @@ def _top_results(items: List[Dict[str, Any]], k: int = 5) -> List[Dict[str, Any]
 
 
 def merge_day1_payload(results: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    입력(results) 예:
-      {
-        "type":"web_results",
-        "query":"AAPL 주가와 기업 정보",
-        "analysis": {... Day1Plan asdict ...},
-        "items":[{title,url,snippet,...}, ...],
-        "tickers":[{symbol,price,currency}|{symbol,error}, ...],
-        "company_profile":"요약 텍스트",
-        "profile_sources":[url1,url2,...],
-        "errors":[...]
-      }
-
-    출력(정규화) 예:
-      {
-        "type":"day1",
-        "query": "...",
-        "web_top":[... 상위 N개 ...],
-        "prices":[...],
-        "company_profile":"...",
-        "profile_sources":[...],
-        "errors":[...]
-      }
-    """
-    # ----------------------------------------------------------------------------
-    # TODO[DAY1-M-02] 구현 지침
-    #  - web_top = _top_results(results.get("items"), k=5)
-    #  - prices  = results.get("tickers", [])
-    #  - company_profile = results.get("company_profile") or ""
-    #  - profile_sources = results.get("profile_sources") or []
-    #  - errors = results.get("errors") or []
-    #  - query  = results.get("query", "")
-    #  - return {...} 형태로 표준 스키마 dict 생성
-    # ----------------------------------------------------------------------------
-    # 정답 구현:
     web_top = _top_results(results.get("items"), k=5)
     prices = results.get("tickers", [])
     company_profile = results.get("company_profile") or ""
@@ -67,8 +32,12 @@ def merge_day1_payload(results: Dict[str, Any]) -> Dict[str, Any]:
     errors = results.get("errors") or []
     query = results.get("query", "")
 
-    # ▼▼ 신규: 리스크 상위 ▼▼
+    # 기존 리스크 결과 유지
     risk_top = _top_results(results.get("risk_items"), k=results.get("analysis", {}).get("risk_topk", 8))
+
+    # 🔹 신규: 트렌드 보고서/표
+    trend_markdown = results.get("trend_markdown") or ""
+    trend_scores = results.get("trend_scores") or []  # 필요시 표 구조(리스트/DF 직렬화)
 
     return {
         "type": "day1",
@@ -77,6 +46,8 @@ def merge_day1_payload(results: Dict[str, Any]) -> Dict[str, Any]:
         "prices": prices,
         "company_profile": company_profile,
         "profile_sources": profile_sources,
-        "risk_top": risk_top,   # 리스크 기능 추가
+        "risk_top": risk_top,
+        "trend_markdown": trend_markdown,
+        "trend_scores": trend_scores,
         "errors": errors,
     }

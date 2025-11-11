@@ -132,9 +132,7 @@ def _handle(query: str) -> Dict[str, Any]:
     #  - 4) agent = Day1Agent(tavily_api_key=api_key, web_topk=6, request_timeout=20)
     #  - 5) return agent.handle(query, plan)
     # ----------------------------------------------------------------------------
-    # 정답 구현:
     import os
-    from student.day1.impl.web_search import looks_like_ticker
 
     # 1) API 키
     api_key = os.getenv("TAVILY_API_KEY", "")
@@ -151,7 +149,30 @@ def _handle(query: str) -> Dict[str, Any]:
         risk_topk = int(os.getenv("RISK_TOPK", "8"))
     except Exception:
         risk_topk = 8
-
+    wants_trend = any(k in query for k in ["트렌드", "검색량", "관심도", "trend"])
+    topics: List[str] = []
+    if wants_trend:
+        # 1) '트렌드/검색량/관심도' 앞쪽 구간만 우선 취급 (예: "넷플릭스, 티빙 트렌드")
+        head = re.split(r"(트렌드|검색량|관심도|trend)", query, maxsplit=1)[0]
+        cand = [x.strip() for x in re.split(r"[,\s]+", head) if x.strip()]
+        stop = {"트렌드", "검색량", "관심도", "trend"}
+        topics = []
+        for c in cand:
+            # 2) 불용어/키워드/숫자-only 제거
+            if c in stop:
+                continue
+            if re.fullmatch(r"\d+", c):
+                continue
+            if len(c) < 2:
+                continue
+            topics.append(c)
+        # 3) 중복 제거 및 상한
+        seen = set()
+        deduped = []
+        for t in topics:
+            if t not in seen:
+                deduped.append(t); seen.add(t)
+        topics = deduped[:20]
 
     # 3) 계획 구성
     plan = Day1Plan(
@@ -167,6 +188,13 @@ def _handle(query: str) -> Dict[str, Any]:
         risk_time_range=risk_time_range,
         risk_topk=risk_topk,
         risk_keywords=[],  # 사용자가 추가할 경우 주입
+
+        # (신규) 트렌드 옵션
+        do_trend=bool(topics),
+        trend_topics=topics,
+        trend_days=90,
+        trend_recent_days=14,
+        trend_base_days=14,
     )
 
 
@@ -251,10 +279,11 @@ def before_model_callback(
 day1_web_agent = Agent(
     name="Day1WebAgent",
     model=MODEL,
-    description="웹 검색 + (필요시) 주가 + 기업 개요 요약 제공",
+    description="웹 검색 + (필요시) 주가 + 기업 개요 요약 + 투자 리스크 + 검색 트렌드 제공",
     instruction=(
-        "사용자 질의에 대해 웹 검색 결과와 (티커가 있으면) 주가 스냅샷, "
-        "기업 개요 요약을 표준 마크다운으로 제공하라. 필요한 경우 출처 링크를 포함하라."
+        "사용자 질의에 대해 웹 검색 결과와 (티커가 있으면) 주가 스냅샷, 기업 개요 요약, "
+        "투자 리스크 하이라이트, 검색 트렌드(요청 시)를 표준 마크다운으로 제공하라. "
+        "필요한 경우 출처 링크를 포함하라."
     ),
     tools=[],
     before_model_callback=before_model_callback,
