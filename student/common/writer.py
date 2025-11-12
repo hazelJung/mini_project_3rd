@@ -355,8 +355,8 @@ def render_day3(query: str, payload: Dict[str, Any]) -> str:
     items = payload.get("items", [])
     lines = [f"# 공고 탐색 결과", f"- 질의: {query}", ""]
     if items:
-        lines.append("| 출처 | 제목 | 기관 | 접수 마감 | 예산 | URL | 점수 |")
-        lines.append("|---|---|---|---:|---:|---|---:|")
+        lines.append("| 출처 | 제목 | 기관 | 접수 마감 | 예산 | URL |")
+        lines.append("|---|---|---|---:|---:|---|")
         for it in items[:10]:
             src = it.get('source','-')
             title = it.get('title','-')
@@ -364,8 +364,7 @@ def render_day3(query: str, payload: Dict[str, Any]) -> str:
             close = it.get('close_date','-')
             budget = it.get('budget','-')
             url = it.get('url','-')
-            score = it.get('score',0)
-            lines.append(f"| {src} | {title} | {agency} | {close or '-'} | {budget or '-'} | {url} | {score:.3f} |")
+            lines.append(f"| {src} | {title} | {agency} | {close or '-'} | {budget or '-'} | {url} |")
     else:
         lines.append("관련 공고를 찾지 못했습니다.")
         
