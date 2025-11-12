@@ -41,7 +41,7 @@ MODEL = LiteLlm(model="openai/gpt-4o-mini")
 #   - before/after 콜백은 필요 없음(기본 LLM-Tool 루프)
 # ------------------------------------------------------------------------------
 root_agent = Agent(
-    name="KT_AIVLE_Orchestrator",  # <- 필요 시 수정(하이픈 금지!)
+    name="K_Surfer",  # <- 필요 시 수정(하이픈 금지!)
     model=MODEL,                   # <- TODO[ROOT-A-01]
     description=ORCHESTRATOR_DESC, # <- TODO[ROOT-P-01]
     instruction=ORCHESTRATOR_PROMPT,  # <- TODO[ROOT-P-02]
