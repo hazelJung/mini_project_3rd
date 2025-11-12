@@ -54,9 +54,20 @@ def _req_params(keyword: Optional[str], page: int, rows: int) -> Dict[str, Any]:
 
 def _call_op(op: str, params: Dict[str, Any], timeout: int = 20) -> Dict[str, Any]:
     url = f"{PPS_BASE}/{op}"
+    # API 키 확인
+    if not params.get("serviceKey"):
+        raise ValueError("PPS_SERVICE_KEY 또는 PPS_API_KEY 환경변수가 설정되지 않았습니다.")
     r = requests.get(url, params=params, timeout=timeout)
     r.raise_for_status()
-    return r.json()
+    result = r.json()
+    # API 오류 응답 확인
+    if "response" in result and "header" in result["response"]:
+        header = result["response"]["header"]
+        result_code = header.get("resultCode", "")
+        if result_code != "00" and result_code != "0":
+            error_msg = header.get("resultMsg", "알 수 없는 오류")
+            raise ValueError(f"나라장터 API 오류 (코드: {result_code}): {error_msg}")
+    return result
 
 def _extract_items(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     # 표준 응답 구조: response → body → items
@@ -104,6 +115,8 @@ def pps_fetch_bids(keyword: Optional[str] = None,
     """
     params0 = _req_params(keyword=keyword, page=1, rows=rows)
     all_items: List[Dict[str, Any]] = []
+    last_error = None
+    
     for op in OPS_CANDIDATES:
         try:
             # 페이지네이션
@@ -116,13 +129,31 @@ def pps_fetch_bids(keyword: Optional[str] = None,
                 all_items.extend(items)
             if all_items:
                 break
-        except Exception:
+        except Exception as e:
+            last_error = e
             continue
+    
+    # 모든 오퍼레이션이 실패한 경우
+    if not all_items and last_error:
+        raise last_error
 
-    # 클라이언트 키워드 필터(제목)
+    # 클라이언트 키워드 필터(제목) - 더 유연한 필터링
     if keyword:
         key = keyword.strip()
-        all_items = [it for it in all_items if key in str(it.get("bidNtceNm") or it.get("bidNm") or it.get("ntceNm") or "")]
+        if key:
+            # 키워드를 단어로 분리 (예: "VFX 용역" -> ["VFX", "용역"])
+            keywords = [k.strip().lower() for k in key.split() if k.strip()]
+            if keywords:
+                filtered = []
+                for it in all_items:
+                    title = str(it.get("bidNtceNm") or it.get("bidNm") or it.get("ntceNm") or "").lower()
+                    agency = str(it.get("dminsttNm") or it.get("ntceInsttNm") or it.get("orgNm") or "").lower()
+                    # 전체 키워드 문자열이 포함되거나, 개별 키워드 중 하나라도 포함되면 포함
+                    full_key = key.lower()
+                    if (full_key in title or full_key in agency or 
+                        any(kw in title or kw in agency for kw in keywords)):
+                        filtered.append(it)
+                all_items = filtered
 
     return all_items
 

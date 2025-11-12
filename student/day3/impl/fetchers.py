@@ -58,7 +58,10 @@ def fetch_nipa(query: str, topk: int = NIPA_TOPK) -> List[Dict[str, Any]]:
         include_domains=["nipa.kr"],
     )
 
-    # 4) 그대로 반환
+    # 4) source 필드 추가
+    for r in (results or []):
+        r["source"] = "NIPA"
+    
     return results or []
 
 def fetch_bizinfo(query: str, topk: int = BIZINFO_TOPK) -> List[Dict[str, Any]]:
@@ -86,6 +89,11 @@ def fetch_bizinfo(query: str, topk: int = BIZINFO_TOPK) -> List[Dict[str, Any]]:
         timeout=DEFAULT_TIMEOUT,
         include_domains=["bizinfo.go.kr"],
     )
+    
+    # source 필드 추가
+    for r in (results or []):
+        r["source"] = "BizInfo"
+    
     return results or []
 
 def fetch_web(query: str, topk: int = WEB_TOPK, api_key: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -111,6 +119,11 @@ def fetch_web(query: str, topk: int = WEB_TOPK, api_key: Optional[str] = None) -
         top_k=int(topk),
         timeout=DEFAULT_TIMEOUT,
     )
+    
+    # source 필드 추가
+    for r in (results or []):
+        r["source"] = "웹"
+    
     return results or []
 
 def fetch_all(query: str) -> List[Dict[str, Any]]:

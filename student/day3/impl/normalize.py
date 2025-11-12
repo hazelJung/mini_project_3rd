@@ -34,14 +34,28 @@ def normalize_all(raw_items: List[Dict]) -> List[Dict]:
         # Day1 웹결과 스키마: title/url/source/snippet/date
         title = (r.get("title") or "").strip()
         url = (r.get("url") or "").strip()
-        source = (r.get("source") or "").strip().lower()
+        source = (r.get("source") or "").strip()
         snippet = (r.get("snippet") or "").strip()
         date_guess = _as_date_iso(r.get("date") or "")
+
+        # source 결정: 명시적 source가 있으면 사용, 없으면 URL에서 도메인 추출
+        if source:
+            # 이미 설정된 source 사용 (NIPA, BizInfo, 웹 등)
+            final_source = source
+        else:
+            # URL에서 도메인 추출하여 source 결정
+            url_lower = url.lower()
+            if "nipa.kr" in url_lower:
+                final_source = "NIPA"
+            elif "bizinfo.go.kr" in url_lower or "bizinfo" in url_lower:
+                final_source = "BizInfo"
+            else:
+                final_source = "웹"
 
         norm.append({
             "title": title,
             "url": url,
-            "source": "nipa" if "nipa" in source else ("bizinfo" if "bizinfo" in source else "web"),
+            "source": final_source,
             "agency": "",
             "announce_date": date_guess,   # 알 수 없으면 빈 값
             "close_date": "",              # 랭커에서 없을 경우 패널티

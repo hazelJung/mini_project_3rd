@@ -134,8 +134,23 @@ def before_model_callback(
 day3_gov_agent = Agent(
     name="Day3GovAgent",
     model=MODEL,
-    description="영상/미디어 관련 기술 정부사업 공고/바우처 정보 수집 및 분석",
-    instruction="질의를 기반으로 정부/공공 포털(NIPA, BizInfo)에서 영상/미디어 관련 기술 공고를 수집하고 표로 요약해라. 영상 처리, AI/VR/AR, 콘텐츠 제작, 스트리밍 기술, 미디어 플랫폼 관련 공고를 우선적으로 필터링하라.",
+    description="정부 지원사업/바우처/RFP/모집공고 정보 수집 및 분석 (NIPA, BizInfo, 기업마당 등)",
+    instruction="""질의를 기반으로 정부/공공 포털(NIPA, BizInfo, 기업마당 등)에서 정부 지원사업, 바우처, RFP, 모집공고를 수집하고 표로 요약해라.
+
+[역할]
+- 정부 지원사업, 바우처, RFP(Request for Proposal), 모집공고, 사업화 지원, 기업마당, Bizinfo, NIPA 지원사업 등을 처리한다.
+- 나라장터 입찰·조달 공고는 Day3PpsAgent가 담당하므로, 지원사업/바우처 관련 질의만 처리한다.
+
+[처리 범위]
+- 영상/미디어 관련 기술 공고: 영상 처리, AI/VR/AR, 콘텐츠 제작, 스트리밍 기술, 미디어 플랫폼 관련 공고를 우선적으로 필터링
+- 정부 지원사업, 바우처, RFP, 모집공고, 사업화 지원사업 등
+
+[주의]
+- 나라장터 입찰·조달 공고는 이 에이전트의 범위가 아니므로, 해당 키워드가 있으면 Day3PpsAgent를 사용하도록 안내한다.
+- 결과를 표 형태로 구조화하여 제공한다.""",
     tools=[],
     before_model_callback=before_model_callback,
 )
+
+
+

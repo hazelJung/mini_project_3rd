@@ -84,6 +84,9 @@ def resolve_params(user_query: str) -> PpsParams:
     inqry_div = os.getenv("PPS_INQRY_DIV", "1").strip() or "1"
 
     keyword = (user_query or os.getenv("PPS_DEFAULT_QUERY", "")).strip()
+    # 키워드가 비어있으면 None으로 설정 (모든 공고 검색)
+    if not keyword:
+        keyword = None
     return PpsParams(keyword=keyword, date_from=date_from, date_to=date_to,
                      rows=rows, page_max=page_max, inqry_div=inqry_div)
 
@@ -147,29 +150,35 @@ def save_markdown(query: str, items: List[Dict[str, Any]], route: str="pps") -> 
 # 검색 실행(외부 노출 함수)
 def pps_search(query: str) -> str:
     """
-    1) 파라미터 해석(.env 흡수, 최근 N일 기본)
-    2) pps_api 호출(함수명/시그니처 다양성 방어)
-    3) to_common_schema 있으면 정규화, 없으면 최소 매핑
-    4) 마크다운 저장 후 본문 반환
+    나라장터(G2B) 입찰공고를 검색합니다.
+    
+    Args:
+        query: 검색 키워드 (예: "VFX 용역", "AI 교육 입찰", "나라장터 콘텐츠")
+    
+    Returns:
+        마크다운 형식의 검색 결과 (표 형태로 공고명, 발주기관, 공고번호, 공고일자, 마감일자, 예산, 링크 포함)
     """
     if _FETCH is None:
         return "⚠️ PPS API 모듈(student/day3/impl/pps_api.py)을 찾을 수 없습니다."
 
-    p = resolve_params(query)
-
-    # 호출(함수 시그니처 차이를 방어적으로 처리)
     try:
+        p = resolve_params(query)
+    except Exception as e:
+        return f"⚠️ 파라미터 해석 오류: {e}"
+
+    # 호출: pps_fetch_bids는 keyword, page_max, rows만 받음
+    raw: List[Dict[str, Any]] = []
+    try:
+        # pps_fetch_bids의 실제 시그니처에 맞게 호출
         raw = _FETCH(
-            keyword=p.keyword,
-            date_from=p.date_from,
-            date_to=p.date_to,
-            rows=p.rows,
+            keyword=p.keyword if p.keyword else None,
             page_max=p.page_max,
-            inqry_div=p.inqry_div,
+            rows=p.rows,
         )
-    except TypeError:
-        # 일부 구현은 (keyword, page_max)만 받도록 단순화됐을 수 있음
-        raw = _FETCH(keyword=p.keyword, page_max=p.page_max)  # type: ignore[misc]
+    except Exception as e:
+        import traceback
+        error_detail = traceback.format_exc()
+        return f"⚠️ 나라장터 API 호출 오류: {e}\n\n디버그 정보:\n{error_detail}"
 
     # 공통 스키마 정규화
     items: List[Dict[str, Any]] = []
@@ -193,7 +202,38 @@ def pps_search(query: str) -> str:
                 "attachments": r.get("atchFileList") or r.get("attachments", []),
             })
 
+    # 결과가 비어있을 때 안내 메시지
+    if not items:
+        keyword_info = f" (키워드: '{p.keyword or query}')" if (p.keyword or query) else ""
+        return f"""---
+output_schema: v1
+type: markdown
+route: pps
+saved: (no results)
+query: "{query.replace('\"','\\\"')}"
+---
+
+# 나라장터 입찰공고 검색 결과
+
+- 질의: {query}{keyword_info}
+
+**관련 공고를 찾지 못했습니다.**
+
+가능한 원인:
+1. 검색 키워드가 너무 구체적일 수 있습니다. 더 일반적인 키워드로 시도해보세요.
+2. 최근 {os.getenv('PPS_DEFAULT_LAST_DAYS', '30')}일 이내에 해당 키워드와 관련된 공고가 없을 수 있습니다.
+3. PPS_SERVICE_KEY 환경변수가 설정되지 않았거나 유효하지 않을 수 있습니다.
+
+**제안:**
+- 키워드를 더 일반적으로 변경해보세요 (예: "VFX" → "영상", "AI" → "인공지능")
+- Day3GovAgent를 사용하여 정부 지원사업/바우처를 검색해보세요.
+"""
+    
     # 저장 + 본문 반환
-    save_markdown(p.keyword or query, items, route="pps")
+    try:
+        save_markdown(p.keyword or query, items, route="pps")
+    except Exception:
+        pass  # 저장 실패해도 결과는 반환
+    
     # 렌더 본문만 반환(ADK FunctionTool은 문자열 반환이 간단)
     return _render_markdown(p.keyword or query, items, saved_path="(see header)")
