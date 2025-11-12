@@ -21,7 +21,7 @@ from google.adk.models.llm_response import LlmResponse
 
 from .impl.rag import Day2Agent
 from ..common.writer import render_day2, render_enveloped
-from ..common.schemas import Day2Plan
+from ..common.schemas import Day2Plan      
 from ..common.fs_utils import save_markdown
 
 
@@ -128,11 +128,13 @@ def _parse_from_query(query: str, known_countries: List[str], known_categories: 
     return cand_country, cand_category, cand_topn
 
 def _pick_top_netflix(docs: List[Dict[str, Any]], country: Optional[str], category: Optional[str], top_n: Optional[int]) -> List[Dict[str, Any]]:
-    """넷플릭스 TOP 리스트 추출 (rank 기반)"""
+    """넷플릭스 TOP 리스트 추출 (rank 기반, 중복 제거 및 순위 정렬)"""
     want_c = _normalize_country(country) if country else None
     want_cat = _normalize_category(category) if category else None
     
     rows = []
+    seen = set()  # 중복 제거용: (rank, title) 튜플 저장
+    
     for doc in docs:
         meta = doc.get("meta", {}) or {}
         title = (doc.get("text") or "").strip()
@@ -143,17 +145,29 @@ def _pick_top_netflix(docs: List[Dict[str, Any]], country: Optional[str], catego
             continue
         if want_cat and (meta.get("category") or "").capitalize() != want_cat:
             continue
+        
+        # 중복 체크: 같은 rank와 title 조합이 이미 있으면 스킵
+        rank_int = int(rank)
+        key = (rank_int, title.lower())  # 대소문자 무시하고 비교
+        if key in seen:
+            continue
+        seen.add(key)
+        
         rows.append({
-            "rank": int(rank),
+            "rank": rank_int,
             "title": title,
             "country": meta.get("country"),
             "category": meta.get("category"),
             "weeks_in_top": meta.get("weeks_in_top"),
         })
     
+    # rank 순으로 정렬 (1위부터 순서대로)
     rows.sort(key=lambda x: x["rank"])
+    
+    # top_n 제한 적용
     if top_n:
         rows = [x for x in rows if x["rank"] <= top_n]
+    
     return rows
 
 def _is_netflix_query(query: str) -> bool:
